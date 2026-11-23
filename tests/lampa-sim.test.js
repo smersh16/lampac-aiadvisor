@@ -1,0 +1,131 @@
+'use strict';
+
+// Имитация Lampa: проверяет поток «история → запросы к TMDB → ранжирование → ряд на главной».
+// Запуск: node tests/lampa-sim.test.js
+const assert = require('assert');
+const path = require('path');
+
+const store = {};
+const rows = [];
+const settings = [];
+const tmdbCalls = [];
+const posts = [];
+
+const tmdbData = {
+    // рекомендации к аниме-сериалу 1
+    'tv/1/recommendations': [
+        { id: 50, name: 'Другое аниме', first_air_date: '2015-01-01', genre_ids: [16, 10759], original_language: 'ja', vote_average: 8, vote_count: 900 },
+        { id: 51, name: 'Мультсериал', first_air_date: '2015-01-01', genre_ids: [16, 35], original_language: 'en', vote_average: 8, vote_count: 900 },
+        { id: 52, name: 'Обычный сериал', first_air_date: '2015-01-01', genre_ids: [18], original_language: 'en', vote_average: 8, vote_count: 900 }
+    ],
+    'tv/1/similar': [
+        { id: 50, name: 'Другое аниме', first_air_date: '2015-01-01', genre_ids: [16, 10759], original_language: 'ja', vote_average: 8, vote_count: 900 },
+        { id: 1, name: 'Уже смотрели', first_air_date: '2002-01-01', genre_ids: [16], original_language: 'ja', vote_average: 8, vote_count: 900 }
+    ],
+    'discover/tv': [
+        { id: 53, name: 'Аниме про реалити', first_air_date: '2019-01-01', genre_ids: [16], original_language: 'ja', overview: 'реалити', vote_average: 7, vote_count: 500 }
+    ],
+    'discover/movie': [
+        { id: 60, title: 'Аниме-фильм', release_date: '2016-01-01', genre_ids: [16, 10749], original_language: 'ja', vote_average: 8.5, vote_count: 2000 },
+        { id: 61, title: 'Обычный фильм', release_date: '2016-01-01', genre_ids: [28], original_language: 'en', vote_average: 8.5, vote_count: 2000 },
+        { id: 62, title: 'Мультфильм из подборки', release_date: '2016-01-01', genre_ids: [16, 35], original_language: 'en', vote_average: 8, vote_count: 2000 }
+    ]
+};
+
+global.window = { appready: true };
+global.Lampa = {
+    Storage: {
+        get: (k, d) => (k in store ? store[k] : (d === undefined ? '' : d)),
+        set: (k, v) => { store[k] = v; }
+    },
+    Utils: { addUrlComponent: (u, c) => u + (u.includes('?') ? '&' : '?') + c },
+    Reguest: function () {
+        this.timeout = () => { };
+        this.silent = (url, ok, fail, body) => {
+            if (body) { posts.push({ url, body: JSON.parse(body) }); return ok({ success: true }); }
+            if (url.includes('/aiadvisor/data')) return ok({ seen: { anime: [], cartoon: [], tv: [], movie: [] }, prefs: {} });
+            fail();
+        };
+    },
+    Api: {
+        sources: {
+            tmdb: {
+                get: (method, params, ok) => {
+                    tmdbCalls.push({ method, params });
+                    const key = method.replace(/\/\d+\//, (m) => m);
+                    const results = tmdbData[key] || [];
+                    setTimeout(() => ok({ results: results.map(r => ({ ...r })) }), 0);
+                }
+            }
+        }
+    },
+    Favorite: {
+        get: () => [
+            { id: 1, name: 'Наруто', first_air_date: '2002-10-03', genre_ids: [16, 10759], original_language: 'ja' },
+            { id: 2, title: 'Начало', release_date: '2010-07-15', genre_ids: [28, 878], original_language: 'en' }
+        ]
+    },
+    ContentRows: { add: (row) => rows.push(row) },
+    SettingsApi: {
+        addComponent: () => { },
+        addParam: (p) => settings.push(p)
+    },
+    Listener: { follow: () => { } }
+};
+
+require(path.join(__dirname, '..', 'AiAdvisor', 'plugin.js'));
+
+function run(name) {
+    const row = rows.find(r => r.name === name);
+    const fn = row.call({}, 'main');
+    return new Promise(resolve => fn(resolve));
+}
+
+(async () => {
+    assert.strictEqual(rows.length, 4, 'четыре ряда');
+    assert.deepStrictEqual(rows.map(r => r.name), ['aiadvisor_anime', 'aiadvisor_cartoon', 'aiadvisor_tv', 'aiadvisor_movie']);
+    assert.ok(rows.every(r => r.screen.includes('main')));
+    assert.ok(settings.length > 20, 'настройки зарегистрированы');
+
+    // аниме: из кандидатов остаются только аниме, просмотренное (id 1) и стоп-слова исключены
+    store['aiadvisor_anime_stop'] = 'реалити';
+    const anime = await run('aiadvisor_anime');
+    const ids = anime.results.map(r => r.id);
+    console.log('anime ids:', ids);
+    assert.ok(ids.includes(50), 'аниме-рекомендация есть');
+    assert.ok(ids.includes(60), 'аниме-фильм из подборки есть');
+    assert.ok(!ids.includes(1), 'просмотренное исключено');
+    assert.ok(!ids.includes(51), 'мультсериал не попал в аниме');
+    assert.ok(!ids.includes(52), 'обычный сериал не попал в аниме');
+    assert.ok(!ids.includes(61), 'обычный фильм не попал в аниме');
+    assert.ok(!ids.includes(62), 'мультфильм из подборки не попал в аниме');
+    assert.ok(!ids.includes(53), 'стоп-слово сработало');
+    assert.strictEqual(ids[0], 50, 'карточка с двумя попаданиями первая');
+    assert.strictEqual(anime.title, 'Для вас: Аниме');
+
+    // журнал отправлен на сервер, в нём 2 записи с категориями anime и movie
+    const seenPost = posts.find(p => Array.isArray(p.body));
+    assert.ok(seenPost, 'журнал отправлен');
+    assert.deepStrictEqual(seenPost.body.map(i => i.cat).sort(), ['anime', 'movie']);
+
+    // мультфильмы: просмотренного нет, кандидаты только из подборки, аниме среди них нет
+    const cartoon = await run('aiadvisor_cartoon');
+    assert.deepStrictEqual(cartoon.results.map(r => r.id), [62]);
+
+    // выключенный ряд ничего не возвращает
+    store['aiadvisor_tv_enabled'] = false;
+    const tvRow = rows.find(r => r.name === 'aiadvisor_tv');
+    assert.strictEqual(tvRow.call({}, 'main'), undefined);
+
+    // запросы discover для аниме содержат жанр 16 и язык ja
+    const disc = tmdbCalls.find(c => c.method === 'discover/tv');
+    assert.strictEqual(disc.params.filter.with_genres.split(',')[0], '16');
+    assert.strictEqual(disc.params.filter.with_original_language, 'ja');
+
+    // кэш: повторный вызов не ходит в TMDB
+    const before = tmdbCalls.length;
+    await run('aiadvisor_anime');
+    assert.strictEqual(tmdbCalls.length, before, 'повторный вызов берётся из кэша');
+
+    console.log('lampa-sim: все проверки прошли');
+})().catch(e => { console.error('FAIL', e.message); process.exit(1); });
