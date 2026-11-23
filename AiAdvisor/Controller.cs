@@ -232,17 +232,17 @@ public class AiAdvisorController : BaseController
     {
         string path = PathOf(area);
 
-        if (!File.Exists(path))
+        if (!System.IO.File.Exists(path))
             return new JObject();
 
         try
         {
-            return JObject.Parse(File.ReadAllText(path, Encoding.UTF8));
+            return JObject.Parse(System.IO.File.ReadAllText(path, Encoding.UTF8));
         }
         catch
         {
             // повреждённый файл не затираем: откладываем в сторону и начинаем с чистого
-            try { File.Move(path, path + ".bad-" + DateTime.UtcNow.ToString("yyyyMMddHHmmss"), true); } catch { }
+            try { System.IO.File.Move(path, path + ".bad-" + DateTime.UtcNow.ToString("yyyyMMddHHmmss"), true); } catch { }
             return new JObject();
         }
     }
@@ -253,8 +253,8 @@ public class AiAdvisorController : BaseController
         Directory.CreateDirectory(Path.GetDirectoryName(path));
 
         string tmp = path + ".tmp";
-        File.WriteAllText(tmp, data.ToString(Formatting.None), new UTF8Encoding(false));
-        File.Move(tmp, path, true);
+        System.IO.File.WriteAllText(tmp, data.ToString(Formatting.None), new UTF8Encoding(false));
+        System.IO.File.Move(tmp, path, true);
     }
 
     async Task<JToken> ReadBody()
