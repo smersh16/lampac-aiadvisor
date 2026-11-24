@@ -200,7 +200,9 @@
             }
 
             var s = 0;
-            s += Math.min(cand.hits || 0, 5);
+            // hits: сумма весов источников (рекомендации и похожие на просмотренное весят до 1,
+            // общая подборка по жанрам 0,2), поэтому «следствие истории» обгоняет просто популярное
+            s += 2.5 * Math.min(cand.hits || 0, 4);
 
             gs.forEach(function (g) {
                 s += 2 * (profile.genres[g] || 0);
@@ -247,6 +249,11 @@
 
     if (typeof module !== 'undefined' && module.exports) module.exports = Core;
     if (typeof Lampa === 'undefined') return;
+
+    // Плагин могут подключить дважды (customPlugins и расширения Lampa): без этой защиты
+    // ряды и настройки регистрируются по два раза
+    if (window.aiadvisor_loaded) return;
+    window.aiadvisor_loaded = true;
 
     // =====================================================================
     //  Часть Lampa
@@ -325,6 +332,7 @@
                 tmdbGet(req.method, req.params, function (json) {
                     (json.results || []).forEach(function (r) {
                         r.media_type = req.media;
+                        r._w = req.weight || 1;
                         results.push(r);
                     });
                     release();
@@ -433,9 +441,10 @@
 
     function buildRequests(cat, prefs, profile) {
         var requests = [];
-        profile.seeds.slice(0, SEEDS).forEach(function (seed) {
+        profile.seeds.slice(0, SEEDS).forEach(function (seed, rank) {
+            seed.weight = 1 / (1 + 0.05 * rank);
             ['recommendations', 'similar'].forEach(function (kind) {
-                requests.push({ method: seed.media + '/' + seed.id + '/' + kind, params: {}, media: seed.media });
+                requests.push({ method: seed.media + '/' + seed.id + '/' + kind, params: {}, media: seed.media, weight: seed.weight });
             });
         });
 
@@ -444,13 +453,14 @@
             requests.push({
                 method: 'discover/' + media,
                 params: { filter: discoverFilter(cat, prefs, profile) },
-                media: media
+                media: media,
+                weight: 0.2
             });
         });
         return requests;
     }
 
-    function recommend(cat, cb) {
+    function recommend(cat, cb, debug) {
         var prefs = Core.normalizePrefs(rawPrefs(cat));
         if (!prefs.enabled) return cb([]);
 
@@ -467,12 +477,22 @@
 
             var profile = Core.buildProfile(items);
 
+            if (debug) {
+                console.log('[aiadvisor] история Lampa:', snapshot.length, 'записей; журнал сервера по категориям:',
+                    Core.CATS.map(function (c) { return c + '=' + ((journal.seen && journal.seen[c] || []).length); }).join(' '));
+                console.log('[aiadvisor] категория', cat, ': записей', items.length, '; опорные:',
+                    profile.seeds.slice(0, SEEDS).map(function (i) { return i.t + ' (' + i.media + ' ' + i.id + ')'; }).join(' | '));
+                console.log('[aiadvisor] жанры профиля:', JSON.stringify(profile.genres), 'языки:', JSON.stringify(profile.langs));
+            }
+
             fetchAll(buildRequests(cat, prefs, profile), function (raw) {
                 var map = {};
                 raw.forEach(function (r) {
                     var k = Core.seenKey(Core.mediaOf(r), r.id);
-                    if (map[k]) map[k].hits++;
-                    else { r.hits = 1; map[k] = r; }
+                    var w = r._w || 1;
+                    delete r._w;
+                    if (map[k]) map[k].hits += w;
+                    else { r.hits = w; map[k] = r; }
                 });
 
                 var cands = [];
@@ -481,12 +501,20 @@
                     if (Core.categoryOf(map[k2]) === cat) cands.push(map[k2]);
                 }
 
-                var results = Core.rank(cands, {
+                var rankCtx = {
                     prefs: prefs,
                     profile: profile,
                     watched: merged.watched,
                     currentYear: new Date().getFullYear()
-                }, 20);
+                };
+                var results = Core.rank(cands, rankCtx, 20);
+
+                if (debug) {
+                    console.log('[aiadvisor] запросов к TMDB:', raw.length ? 'получено ' + raw.length + ' карточек' : 'пусто', '; кандидатов категории:', cands.length);
+                    console.log('[aiadvisor] итог:', results.map(function (c) {
+                        return (c.title || c.name) + ' [hits ' + Math.round(c.hits * 10) / 10 + ', score ' + Math.round(Core.score(c, rankCtx) * 10) / 10 + ']';
+                    }).join(' | '));
+                }
 
                 cacheSet(cat, sig, results);
                 cb(results);
@@ -600,6 +628,16 @@
             });
         });
     }
+
+    // Диагностика в консоли браузера: aiadvisorDebug('anime') | 'cartoon' | 'tv' | 'movie'
+    window.aiadvisorDebug = function (cat) {
+        cat = cat || 'anime';
+        Lampa.Storage.set(storageKey(cat, 'cache'), '');
+        lastPost = 0;
+        recommend(cat, function (results) {
+            console.log('[aiadvisor] готово,', results.length, 'карточек');
+        }, true);
+    };
 
     function start() {
         if (ready) return;

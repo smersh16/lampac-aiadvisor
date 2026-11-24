@@ -124,6 +124,12 @@ test('повторное попадание в рекомендации повы
     const x = ctx({});
     assert.ok(Core.score(a, x) > Core.score(b, x));
 });
+test('рекомендация от просмотренного обгоняет популярное из общей подборки', () => {
+    const fromHistory = { id: 30, title: 'A', genre_ids: [18], ...base, hits: 1, vote_average: 7, vote_count: 500 };
+    const popular = { id: 31, title: 'B', genre_ids: [18], ...base, hits: 0.2, vote_average: 8.7, vote_count: 30000 };
+    const x = ctx({}, [{ g: [18], l: 'en', ts: 5 }]);
+    assert.ok(Core.score(fromHistory, x) > Core.score(popular, x));
+});
 test('любимый жанр из настроек повышает оценку', () => {
     const a = { id: 20, title: 'A', genre_ids: [9648], ...base };
     const b = { id: 21, title: 'B', genre_ids: [35], ...base };

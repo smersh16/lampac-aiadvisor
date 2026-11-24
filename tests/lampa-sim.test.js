@@ -87,6 +87,13 @@ function run(name) {
     assert.ok(rows.every(r => r.screen.includes('main')));
     assert.ok(settings.length > 20, 'настройки зарегистрированы');
 
+    // повторная загрузка плагина не дублирует ряды и настройки
+    const settingsBefore = settings.length;
+    delete require.cache[require.resolve(path.join(__dirname, '..', 'AiAdvisor', 'plugin.js'))];
+    require(path.join(__dirname, '..', 'AiAdvisor', 'plugin.js'));
+    assert.strictEqual(rows.length, 4, 'после второй загрузки рядов по-прежнему четыре');
+    assert.strictEqual(settings.length, settingsBefore, 'настройки не продублированы');
+
     // аниме: из кандидатов остаются только аниме, просмотренное (id 1) и стоп-слова исключены
     store['aiadvisor_anime_stop'] = 'реалити';
     const anime = await run('aiadvisor_anime');
