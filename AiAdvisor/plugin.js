@@ -149,12 +149,23 @@
         // ------------------------------------------------------------------
         //  Профиль вкуса по категории: вес жанров и языков, свежее просмотренное весит больше
         // ------------------------------------------------------------------
+        // Вес записи по проценту досмотра (стартовая эвристика, не научные коэффициенты).
+        // p < 0 или не задан: прогресс неизвестен, запись весит как раньше.
+        function completionWeight(p) {
+            if (p === undefined || p === null || p < 0) return 1;
+            if (p >= 90) return 1;
+            if (p >= 70) return 0.8;
+            if (p >= 40) return 0.45;
+            if (p >= 15) return 0.15;
+            return 0.05;
+        }
+
         function buildProfile(items) {
             var sorted = items.slice().sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); });
             var genres = {};
             var langs = {};
             sorted.forEach(function (it, rank) {
-                var w = 1 / (1 + 0.05 * rank);
+                var w = (1 / (1 + 0.05 * rank)) * completionWeight(it.p);
                 (it.g || []).forEach(function (g) { genres[g] = (genres[g] || 0) + w; });
                 if (it.l) langs[it.l] = (langs[it.l] || 0) + w;
             });
@@ -330,6 +341,7 @@
             buildProfile: buildProfile,
             score: score,
             untranslated: untranslated,
+            completionWeight: completionWeight,
             rank: rank
         };
     })();
@@ -341,12 +353,12 @@
     // ряды и настройки регистрируются по два раза
     if (window.aiadvisor_loaded) return;
     window.aiadvisor_loaded = true;
-    window.aiadvisor_version = '0.8';
+    window.aiadvisor_version = '0.9';
 
     // =====================================================================
     //  Часть Lampa
     // =====================================================================
-    var VERSION = '0.8';
+    var VERSION = '0.9';
     var HOST = '{localhost}';
     var TOKEN = '{token}';
     var CACHE_HOURS = 6;
@@ -448,6 +460,25 @@
 
     var lastPost = 0;
 
+    // Процент досмотра по таймлайну Lampa: -1 — неизвестно.
+    // Сериал: серии 1–24 первого сезона (3 и больше серий считаем полным интересом), 0 — неизвестно
+    // (мог смотреться другой сезон). Фильм: процент просмотра, 0 — почти не смотрел.
+    function completionOf(card, media) {
+        try {
+            if (!Lampa.Timeline || typeof Lampa.Timeline.watched !== 'function') return -1;
+            if (!card.original_name && !card.original_title) return -1;
+            var v = Lampa.Timeline.watched(card, true);
+            if (media === 'tv') {
+                if (!v || !v.length) return -1;
+                if (v.length >= 3) return 100;
+                return Math.max.apply(null, v.map(function (e) { return (e.view && e.view.percent) || 0; }));
+            }
+            return (v && v.percent) || 0;
+        } catch (e) {
+            return -1;
+        }
+    }
+
     function snapshotHistory() {
         var history = [];
         try { history = Lampa.Favorite.get({ type: 'history' }) || []; } catch (e) { /* нет истории */ }
@@ -455,7 +486,10 @@
         var out = [];
         history.forEach(function (card, rank) {
             var item = Core.toSeen(card, now - rank * 60000);
-            if (item) out.push(item);
+            if (item) {
+                item.p = completionOf(card, item.media);
+                out.push(item);
+            }
         });
         return out;
     }
@@ -486,9 +520,13 @@
             var old = map[k];
             if (hasGenres(old) && !hasGenres(it)) {
                 old.ts = Math.max(old.ts || 0, it.ts);
+                if (it.p !== undefined) old.p = it.p;
                 return;
             }
-            if (!old || (old.ts || 0) < it.ts || (!hasGenres(old) && hasGenres(it))) map[k] = it;
+            if (!old || (old.ts || 0) < it.ts || (!hasGenres(old) && hasGenres(it))) {
+                if (old && it.p === undefined && old.p !== undefined) it.p = old.p;
+                map[k] = it;
+            }
         });
         return map;
     }

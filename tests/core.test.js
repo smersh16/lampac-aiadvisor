@@ -107,6 +107,24 @@ test('французское название без перевода исклю
     assert.strictEqual(Core.untranslated({ title: 'Les Intouchables', original_title: 'Les Intouchables', original_language: 'fr' }), true);
 });
 
+// ---- вес по проценту досмотра ----
+test('completionWeight: таблица весов и неизвестный прогресс', () => {
+    assert.strictEqual(Core.completionWeight(100), 1);
+    assert.strictEqual(Core.completionWeight(75), 0.8);
+    assert.strictEqual(Core.completionWeight(50), 0.45);
+    assert.strictEqual(Core.completionWeight(20), 0.15);
+    assert.strictEqual(Core.completionWeight(5), 0.05);
+    assert.strictEqual(Core.completionWeight(-1), 1);
+    assert.strictEqual(Core.completionWeight(undefined), 1);
+});
+test('профиль: недосмотренное влияет слабее досмотренного', () => {
+    const p = Core.buildProfile([
+        { g: [18], l: 'en', ts: 2, p: 100 },
+        { g: [35], l: 'en', ts: 2, p: 10 }
+    ]);
+    assert.ok(p.genres[18] > p.genres[35] * 5);
+});
+
 // ---- предпочтения ----
 test('жанры из текста: точное совпадение', () => {
     assert.deepStrictEqual(Core.genreIdsFromText('драма, ужасы'), [18, 27]);

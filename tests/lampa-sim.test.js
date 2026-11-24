@@ -81,7 +81,7 @@ global.Lampa = {
             { id: 2, title: 'Начало', release_date: '2010-07-15', original_language: 'en' }
         ]
     },
-    Timeline: { watched: (c) => (global.__watchedIds || []).includes(c.id) ? 100 : 0 },
+    Timeline: { watched: (c, t) => { const w = (global.__watchedIds || []).includes(c.id) ? 100 : 0; return t ? (c.original_name ? (w ? [{ ep: 1, view: { percent: w } }] : []) : { percent: w }) : w; } },
     ContentRows: { add: (row) => rows.push(row) },
     Settings: { listener: { follow: (name, fn) => { if (name === 'open') openHandlers.push(fn); } } },
     SettingsApi: {
@@ -105,7 +105,7 @@ function run(name) {
     assert.ok(rows.every(r => r.screen.includes('main')));
     assert.ok(settings.length > 20, 'настройки зарегистрированы');
     const ver = settings.find(p => p.param.name === 'aiadvisor_version');
-    assert.ok(ver && ver.field.description === '0.8', 'версия показана в настройках');
+    assert.ok(ver && ver.field.description === '0.9', 'версия показана в настройках');
 
     // повторная загрузка плагина не дублирует ряды и настройки
     const settingsBefore = settings.length;
