@@ -175,6 +175,16 @@
         //  cand: {id, media, title, original_title, overview, genre_ids, original_language,
         //         release_date|first_air_date, vote_average, vote_count, hits}
         // ------------------------------------------------------------------
+        // Нет русской локализации: название без кириллицы совпадает с оригинальным, а оригинал не английский
+        // (английские названия без перевода допустимы)
+        function untranslated(cand) {
+            var title = String(cand.title || cand.name || '').trim();
+            var orig = String(cand.original_title || cand.original_name || '').trim();
+            var lang = String(cand.original_language || '').toLowerCase();
+            if (!title || !orig || lang === 'en' || lang === 'ru') return false;
+            return !/[а-яё]/i.test(title) && title === orig;
+        }
+
         function score(cand, ctx) {
             var prefs = ctx.prefs;
             var profile = ctx.profile;
@@ -185,6 +195,7 @@
             var rating = cand.vote_average || 0;
 
             if (ctx.watched && ctx.watched[seenKey(mediaOf(cand), cand.id)]) return null;
+            if (untranslated(cand)) return null;
             if (prefs.year_from && year && year < prefs.year_from) return null;
             if (prefs.min_rating && votes >= 50 && rating < prefs.min_rating) return null;
 
@@ -318,6 +329,7 @@
             normalizePrefs: normalizePrefs,
             buildProfile: buildProfile,
             score: score,
+            untranslated: untranslated,
             rank: rank
         };
     })();
@@ -329,12 +341,12 @@
     // ряды и настройки регистрируются по два раза
     if (window.aiadvisor_loaded) return;
     window.aiadvisor_loaded = true;
-    window.aiadvisor_version = '0.7';
+    window.aiadvisor_version = '0.8';
 
     // =====================================================================
     //  Часть Lampa
     // =====================================================================
-    var VERSION = '0.7';
+    var VERSION = '0.8';
     var HOST = '{localhost}';
     var TOKEN = '{token}';
     var CACHE_HOURS = 6;

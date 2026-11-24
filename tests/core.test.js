@@ -90,6 +90,23 @@ test('topGenres: без служебного жанра 16, по убывани�
     assert.deepStrictEqual(Core.topGenres(p, 3), [35, 18]);
 });
 
+// ---- русская локализация ----
+test('без перевода: японское название совпадает с оригиналом — исключается', () => {
+    const c = { id: 40, name: '悪の波動', original_name: '悪の波動', original_language: 'ja', genre_ids: [18], vote_average: 7, vote_count: 500, first_air_date: '2020-01-01' };
+    assert.strictEqual(Core.untranslated(c), true);
+    assert.strictEqual(Core.score(c, { prefs: Core.normalizePrefs({}), profile: Core.buildProfile([]), watched: {}, currentYear: 2026 }), null);
+});
+test('с русским названием проходит', () => {
+    assert.strictEqual(Core.untranslated({ name: 'Страйк', original_name: 'Strike', original_language: 'en' }), false);
+    assert.strictEqual(Core.untranslated({ name: 'Игра в кальмара', original_name: '오징어 게임', original_language: 'ko' }), false);
+});
+test('английское название без перевода допустимо', () => {
+    assert.strictEqual(Core.untranslated({ name: 'Dexter', original_name: 'Dexter', original_language: 'en' }), false);
+});
+test('французское название без перевода исключается', () => {
+    assert.strictEqual(Core.untranslated({ title: 'Les Intouchables', original_title: 'Les Intouchables', original_language: 'fr' }), true);
+});
+
 // ---- предпочтения ----
 test('жанры из текста: точное совпадение', () => {
     assert.deepStrictEqual(Core.genreIdsFromText('драма, ужасы'), [18, 27]);
