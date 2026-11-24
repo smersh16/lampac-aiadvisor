@@ -329,10 +329,12 @@
     // ряды и настройки регистрируются по два раза
     if (window.aiadvisor_loaded) return;
     window.aiadvisor_loaded = true;
+    window.aiadvisor_version = '0.4';
 
     // =====================================================================
     //  Часть Lampa
     // =====================================================================
+    var VERSION = '0.4';
     var HOST = '{localhost}';
     var TOKEN = '{token}';
     var CACHE_HOURS = 6;
@@ -653,6 +655,7 @@
             var profile = Core.buildProfile(items);
 
             if (debug) {
+                console.log('[aiadvisor] версия', VERSION);
                 console.log('[aiadvisor] история Lampa:', snapshot.length, 'записей; дозапрошено жанров:', data.enriched, '; после обогащения по категориям:',
                     Core.CATS.map(function (c) { return c + '=' + (merged.byCat[c] || []).length; }).join(' '));
                 console.log('[aiadvisor] категория', cat, ': записей', items.length, '; опорные:',
