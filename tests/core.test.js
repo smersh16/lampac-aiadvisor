@@ -65,6 +65,31 @@ test('enrich: без жанров в ответе возвращает null', ()
     assert.strictEqual(Core.enrich({ id: 3, media: 'tv', g: [], l: 'en', ts: 1 }, { genres: [] }), null);
 });
 
+// ---- сводка по истории для настроек ----
+test('describe: доли жанров считаются среди записей с жанрами, годы и языки', () => {
+    const items = [
+        { g: [16, 35], l: 'ja', y: 2010, ts: 3 },
+        { g: [16, 18], l: 'ja', y: 2020, ts: 2 },
+        { g: [], l: 'ko', y: 2022, ts: 1 }
+    ];
+    const d = Core.describe(items);
+    assert.strictEqual(d.count, 3);
+    assert.strictEqual(d.withGenres, 2);
+    assert.strictEqual(d.genres[0].id, 16);
+    assert.strictEqual(d.genres[0].share, 1);
+    assert.deepStrictEqual(d.langs[0], { code: 'ja', share: 2 / 3 });
+    assert.deepStrictEqual(d.years, { from: 2010, to: 2022, median: 2020 });
+});
+test('describe: пустая история', () => {
+    const d = Core.describe([]);
+    assert.strictEqual(d.count, 0);
+    assert.strictEqual(d.years, null);
+});
+test('topGenres: без служебного жанра 16, по убыванию веса', () => {
+    const p = Core.buildProfile([{ g: [16, 35, 18], ts: 3 }, { g: [16, 35], ts: 2 }]);
+    assert.deepStrictEqual(Core.topGenres(p, 3), [35, 18]);
+});
+
 // ---- предпочтения ----
 test('жанры из текста: точное совпадение', () => {
     assert.deepStrictEqual(Core.genreIdsFromText('драма, ужасы'), [18, 27]);

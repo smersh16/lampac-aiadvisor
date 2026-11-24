@@ -10,6 +10,11 @@ const rows = [];
 const settings = [];
 const tmdbCalls = [];
 const posts = [];
+const openHandlers = [];
+const infoEls = {};
+function makeBody() {
+    return { find: (sel) => infoEls[sel] || (infoEls[sel] = { length: 1, value: '', text(v) { this.value = v; return this; } }) };
+}
 
 const tmdbDetails = {
     'tv/1': { id: 1, genres: [{ id: 16 }, { id: 10759 }], original_language: 'ja', origin_country: ['JP'], first_air_date: '2002-10-03' },
@@ -71,6 +76,7 @@ global.Lampa = {
         ]
     },
     ContentRows: { add: (row) => rows.push(row) },
+    Settings: { listener: { follow: (name, fn) => { if (name === 'open') openHandlers.push(fn); } } },
     SettingsApi: {
         addComponent: () => { },
         addParam: (p) => settings.push(p)
@@ -133,12 +139,45 @@ function run(name) {
     const tvRow = rows.find(r => r.name === 'aiadvisor_tv');
     assert.strictEqual(tvRow.call({}, 'main'), undefined);
 
-    // запросы discover для аниме содержат жанр 16 и язык ja
-    const disc = tmdbCalls.find(c => c.method === 'discover/tv');
-    assert.strictEqual(disc.params.filter.with_genres.split(',')[0], '16');
-    assert.strictEqual(disc.params.filter.with_original_language, 'ja');
+    // запросы discover для аниме: жанр 16 и языки ja, zh, ko (аниме не обязательно японское)
+    const discAnime = tmdbCalls.filter(c => c.method === 'discover/tv' && c.params.filter.with_genres.split(',')[0] === '16');
+    assert.deepStrictEqual([...new Set(discAnime.map(c => c.params.filter.with_original_language).filter(Boolean))].sort(), ['ja', 'ko', 'zh']);
+    assert.ok(discAnime.some(c => !c.params.filter.with_original_language), 'у мультфильмов язык подборки не ограничен');
+
+    // настройка языков для аниме заменяет умолчание
+    store['aiadvisor_anime_langs'] = 'ja';
+    store['aiadvisor_anime_cache'] = '';
+    const before2 = tmdbCalls.length;
+    await run('aiadvisor_anime');
+    const newCalls = tmdbCalls.slice(before2).filter(c => c.method === 'discover/tv');
+    assert.deepStrictEqual([...new Set(newCalls.map(c => c.params.filter.with_original_language))], ['ja']);
+    store['aiadvisor_anime_langs'] = '';
+    store['aiadvisor_anime_cache'] = '';
+
+    // экран настроек: сводка по истории и текущие значения
+    assert.strictEqual(openHandlers.length, 1, 'обработчик открытия настроек зарегистрирован');
+    openHandlers[0]({ name: 'other', body: makeBody() });
+    openHandlers[0]({ name: 'aiadvisor', body: makeBody() });
+    await new Promise(r => setTimeout(r, 50));
+    const info = infoEls['[data-name="aiadvisor_info_anime"] .settings-param__descr'].value;
+    const now = infoEls['[data-name="aiadvisor_now_anime"] .settings-param__descr'].value;
+    console.log('info:', info);
+    console.log('now: ', now);
+    assert.ok(info.includes('Записей: 1'), 'число записей группы');
+    assert.ok(info.includes('боевик и приключения 100%'), 'жанры из истории без служебного 16');
+    assert.ok(!info.includes('мультфильм'), 'служебный жанр не показан');
+    assert.ok(info.includes('ja 100%'), 'язык из истории');
+    assert.ok(info.includes('2002'), 'год из истории');
+    assert.ok(now.includes('любимые жанры: боевик и приключения (из истории)'), 'применяются жанры из истории');
+    assert.ok(now.includes('языки подборки: ja, zh, ko'), 'языки по умолчанию для аниме');
+    store['aiadvisor_anime_liked'] = 'драма';
+    openHandlers[0]({ name: 'aiadvisor', body: makeBody() });
+    await new Promise(r => setTimeout(r, 50));
+    assert.ok(infoEls['[data-name="aiadvisor_now_anime"] .settings-param__descr'].value.includes('любимые жанры: драма (из настроек)'), 'настройки главнее истории');
+    store['aiadvisor_anime_liked'] = '';
 
     // кэш: повторный вызов не ходит в TMDB
+    await run('aiadvisor_anime');
     const before = tmdbCalls.length;
     await run('aiadvisor_anime');
     assert.strictEqual(tmdbCalls.length, before, 'повторный вызов берётся из кэша');

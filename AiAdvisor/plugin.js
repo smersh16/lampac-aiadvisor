@@ -258,8 +258,53 @@
             return out;
         }
 
+        // Сводка по истории группы для экрана настроек
+        function describe(items) {
+            var total = items.length;
+            var withGenres = 0;
+            var gc = {};
+            var lc = {};
+            var years = [];
+
+            items.forEach(function (it) {
+                if (it.g && it.g.length) {
+                    withGenres++;
+                    it.g.forEach(function (g) { gc[g] = (gc[g] || 0) + 1; });
+                }
+                if (it.l) lc[it.l] = (lc[it.l] || 0) + 1;
+                if (it.y) years.push(it.y);
+            });
+
+            function top(map, limit, denom) {
+                return Object.keys(map).map(function (key) {
+                    return { key: key, count: map[key], share: denom ? map[key] / denom : 0 };
+                }).sort(function (a, b) { return b.count - a.count; }).slice(0, limit);
+            }
+
+            years.sort(function (a, b) { return a - b; });
+
+            return {
+                count: total,
+                withGenres: withGenres,
+                genres: top(gc, 8, withGenres).map(function (g) {
+                    return { id: toInt(g.key), name: GENRES[g.key] || String(g.key), share: g.share };
+                }),
+                langs: top(lc, 3, total).map(function (l) { return { code: l.key, share: l.share }; }),
+                years: years.length ? { from: years[0], to: years[years.length - 1], median: years[Math.floor(years.length / 2)] } : null
+            };
+        }
+
+        // Самые весомые жанры профиля без служебного «мультфильм» (16)
+        function topGenres(profile, limit) {
+            return Object.keys(profile.genres).map(toInt).filter(function (g) { return g !== 16; })
+                .sort(function (a, b) { return profile.genres[b] - profile.genres[a]; })
+                .slice(0, limit);
+        }
+
         return {
             CATS: CATS,
+            describe: describe,
+            topGenres: topGenres,
             enrich: enrich,
             CAT_TITLES: CAT_TITLES,
             GENRES: GENRES,
@@ -544,15 +589,11 @@
     // В TMDB with_genres: запятая значит «И», вертикальная черта «ИЛИ», смешивать нельзя.
     // Аниме и мультфильмы: жанр 16 обязателен, к нему добавляем один любимый жанр через «И».
     // Сериалы и фильмы: любимые жанры (до трёх) через «ИЛИ».
-    function discoverFilter(cat, prefs, profile) {
+    function discoverFilter(cat, prefs, profile, lang) {
         var filter = { sort_by: 'popularity.desc', 'vote_count.gte': 100 };
 
         var liked = prefs.liked.filter(function (g) { return g !== 16; });
-        if (!liked.length) {
-            liked = Object.keys(profile.genres).map(Number).filter(function (g) { return g !== 16; })
-                .sort(function (a, b) { return profile.genres[b] - profile.genres[a]; })
-                .slice(0, 3);
-        }
+        if (!liked.length) liked = Core.topGenres(profile, 3);
 
         if (cat === 'anime' || cat === 'cartoon') {
             filter.with_genres = liked.length ? '16,' + liked[0] : '16';
@@ -560,7 +601,7 @@
             filter.with_genres = liked.slice(0, 3).join('|');
         }
 
-        if (cat === 'anime') filter.with_original_language = 'ja';
+        if (lang) filter.with_original_language = lang;
         if (prefs.year_from) {
             filter['primary_release_date.gte'] = prefs.year_from + '-01-01';
             filter['first_air_date.gte'] = prefs.year_from + '-01-01';
@@ -577,13 +618,19 @@
             });
         });
 
+        // Языки общей подборки: из настроек; для аниме без настроек японский, китайский и корейский
+        // (аниме не обязательно японское); для остальных групп без настроек язык не ограничиваем
+        var langs = prefs.langs.length ? prefs.langs.slice(0, 4) : (cat === 'anime' ? ['ja', 'zh', 'ko'] : [null]);
+
         var medias = cat === 'tv' ? ['tv'] : cat === 'movie' ? ['movie'] : ['tv', 'movie'];
         medias.forEach(function (media) {
-            requests.push({
-                method: 'discover/' + media,
-                params: { filter: discoverFilter(cat, prefs, profile) },
-                media: media,
-                weight: 0.2
+            langs.forEach(function (lang) {
+                requests.push({
+                    method: 'discover/' + media,
+                    params: { filter: discoverFilter(cat, prefs, profile, lang) },
+                    media: media,
+                    weight: 0.2
+                });
             });
         });
         return requests;
@@ -682,6 +729,7 @@
             headers: { 'Content-Type': 'application/json' }
         });
         Core.CATS.forEach(function (cat) { Lampa.Storage.set(storageKey(cat, 'cache'), ''); });
+        setTimeout(refreshInfo, 200);
     }
 
     function pullPrefs(done) {
@@ -703,8 +751,81 @@
         }, function () { done && done(); });
     }
 
+    function genreNames(ids) {
+        return ids.map(function (id) { return Core.GENRES[id] || String(id); }).join(', ');
+    }
+
+    function percent(share) {
+        return Math.round(share * 100) + '%';
+    }
+
+    // Что плагин определил по истории группы
+    function infoText(cat, items) {
+        var d = Core.describe(items);
+        if (!d.count) return 'В истории пока нет записей этой группы';
+
+        var skip = (cat === 'anime' || cat === 'cartoon') ? 16 : 0;
+        var genres = d.genres.filter(function (g) { return g.id !== skip; }).slice(0, 5).map(function (g) {
+            return g.name + ' ' + percent(g.share);
+        });
+        var langs = d.langs.map(function (l) { return l.code + ' ' + percent(l.share); });
+
+        var parts = ['Записей: ' + d.count];
+        if (genres.length) parts.push('жанры: ' + genres.join(', '));
+        if (langs.length) parts.push('языки: ' + langs.join(', '));
+        if (d.years) parts.push('годы: ' + d.years.from + '–' + d.years.to + ', чаще около ' + d.years.median);
+        if (d.withGenres < d.count) parts.push('жанры определены для ' + d.withGenres + ' из ' + d.count + ', остальное дозагрузится');
+        return parts.join(' · ');
+    }
+
+    // Какие значения реально используются при подборе: настройки, а где они пусты, выводы из истории
+    function effectiveText(cat, items) {
+        var prefs = Core.normalizePrefs(rawPrefs(cat));
+        var profile = Core.buildProfile(items);
+        var top = Core.topGenres(profile, 3);
+        var parts = [];
+
+        if (prefs.liked.length) parts.push('любимые жанры: ' + genreNames(prefs.liked) + ' (из настроек)');
+        else if (top.length) parts.push('любимые жанры: ' + genreNames(top) + ' (из истории)');
+        else parts.push('любимые жанры: пока не определены');
+
+        if (prefs.langs.length) parts.push('языки: ' + prefs.langs.join(', ') + ' (из настроек)');
+        else if (cat === 'anime') parts.push('языки подборки: ja, zh, ko; в оценке выше языки из истории');
+        else parts.push('языки: любые; в оценке выше языки из истории');
+
+        parts.push('рейтинг: ' + (prefs.min_rating ? 'от ' + prefs.min_rating : 'любой'));
+        parts.push('год: ' + (prefs.year_from ? 'не старше ' + prefs.year_from : 'любой'));
+        if (prefs.disliked.length) parts.push('скрываю жанры: ' + genreNames(prefs.disliked));
+        if (prefs.stop.length) parts.push('стоп-слов: ' + prefs.stop.length);
+        return parts.join(' · ');
+    }
+
+    var settingsBody = null;
+
+    function refreshInfo() {
+        if (!settingsBody) return;
+        prepare(function (data) {
+            Core.CATS.forEach(function (cat) {
+                var items = data.merged.byCat[cat] || [];
+                var a = settingsBody.find('[data-name="aiadvisor_info_' + cat + '"] .settings-param__descr');
+                var b = settingsBody.find('[data-name="aiadvisor_now_' + cat + '"] .settings-param__descr');
+                if (a.length) a.text(infoText(cat, items));
+                if (b.length) b.text(effectiveText(cat, items));
+            });
+        });
+    }
+
     function registerSettings() {
         if (!Lampa.SettingsApi) return;
+
+        if (Lampa.Settings && Lampa.Settings.listener && typeof Lampa.Settings.listener.follow === 'function') {
+            Lampa.Settings.listener.follow('open', function (e) {
+                if (e && e.name === 'aiadvisor') {
+                    settingsBody = e.body;
+                    refreshInfo();
+                }
+            });
+        }
 
         Lampa.SettingsApi.addComponent({
             component: 'aiadvisor',
@@ -719,6 +840,19 @@
                 component: 'aiadvisor',
                 param: { name: 'aiadvisor_title_' + cat, type: 'title' },
                 field: { name: t }
+            });
+
+            // Только для информации: заполняется при открытии раздела (refreshInfo)
+            Lampa.SettingsApi.addParam({
+                component: 'aiadvisor',
+                param: { name: 'aiadvisor_info_' + cat, type: 'static' },
+                field: { name: 'Что видно в вашей истории', description: 'Загрузка…' }
+            });
+
+            Lampa.SettingsApi.addParam({
+                component: 'aiadvisor',
+                param: { name: 'aiadvisor_now_' + cat, type: 'static' },
+                field: { name: 'Сейчас применяется', description: 'Загрузка…' }
             });
 
             Lampa.SettingsApi.addParam({
