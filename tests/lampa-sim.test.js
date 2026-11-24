@@ -76,7 +76,7 @@ global.Lampa = {
         }
     },
     Favorite: {
-        get: () => [
+        get: (o) => (o && o.type && o.type !== 'history') ? (global.__fav && global.__fav[o.type]) || [] : [
             { id: 1, name: 'Наруто', first_air_date: '2002-10-03', original_language: 'ja' },
             { id: 2, title: 'Начало', release_date: '2010-07-15', original_language: 'en' }
         ]
@@ -105,7 +105,7 @@ function run(name) {
     assert.ok(rows.every(r => r.screen.includes('main')));
     assert.ok(settings.length > 20, 'настройки зарегистрированы');
     const ver = settings.find(p => p.param.name === 'aiadvisor_version');
-    assert.ok(ver && ver.field.description === '0.9', 'версия показана в настройках');
+    assert.ok(ver && ver.field.description === '0.12', 'версия показана в настройках');
 
     // повторная загрузка плагина не дублирует ряды и настройки
     const settingsBefore = settings.length;
@@ -129,6 +129,8 @@ function run(name) {
     assert.ok(!ids.includes(53), 'стоп-слово сработало');
     assert.strictEqual(ids[0], 50, 'карточка с двумя попаданиями первая');
     assert.strictEqual(anime.title, 'Для вас: Аниме');
+    const first = anime.results.find(r => r.id === 50);
+    assert.ok(first.overview.startsWith('Потому что вы смотрели «Наруто»'), 'подпись «почему» с названием опорной записи');
 
     // жанры дозапрошены один раз, хотя рядов четыре; в журнале записи с жанрами и верной категорией
     assert.strictEqual(tmdbCalls.filter(c => c.method === 'tv/1').length, 1, 'детали сериала запрошены один раз');
@@ -171,6 +173,14 @@ function run(name) {
     assert.ok(!tl.includes(50), 'просмотренное по таймлайну исключено');
     global.__watchedIds = [];
     store['aiadvisor_anime_cache'] = '';
+
+    // закладки Lampa (например «Буду смотреть») исключаются из рядов
+    global.__fav = { wath: [{ id: 50, name: 'Другое аниме', first_air_date: '2015-01-01' }] };
+    window.aiadvisorReset();
+    const fav = (await run('aiadvisor_anime')).results.map(r => r.id);
+    assert.ok(!fav.includes(50), 'карточка из закладок исключена');
+    global.__fav = {};
+    window.aiadvisorReset();
 
     // экран настроек: сводка по истории и текущие значения
     assert.strictEqual(openHandlers.length, 1, 'обработчик открытия настроек зарегистрирован');

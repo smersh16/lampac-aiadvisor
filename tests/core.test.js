@@ -10,6 +10,8 @@ function test(name, fn) {
     catch (e) { console.log('FAIL ' + name + '\n     ' + e.message); process.exitCode = 1; }
 }
 
+const base = { vote_average: 7, vote_count: 500, original_language: 'en', release_date: '2020-01-01' };
+
 // ---- категории ----
 test('аниме: анимация + ja', () => {
     assert.strictEqual(Core.categoryOf({ id: 1, name: 'Naruto', first_air_date: '2002-10-03', genre_ids: [16, 10759], original_language: 'ja' }), 'anime');
@@ -125,6 +127,33 @@ test('профиль: недосмотренное влияет слабее д�
     assert.ok(p.genres[18] > p.genres[35] * 5);
 });
 
+// ---- «брошено»: отрицательный сигнал по жанрам ----
+test('нелюбимые по «Брошено» жанры снижают оценку', () => {
+    const c1 = { id: 70, title: 'A', genre_ids: [35], ...base };
+    const c2 = { id: 71, title: 'B', genre_ids: [18], ...base };
+    const prof = Core.buildProfile([]);
+    prof.neg = { 35: 1 };
+    const x = { prefs: Core.normalizePrefs({}), profile: prof, watched: {}, currentYear: 2026 };
+    assert.ok(Core.score(c2, x) > Core.score(c1, x));
+});
+
+// ---- разнообразие ----
+test('один главный жанр занимает не больше 60% ряда', () => {
+    const cands = [];
+    for (let i = 0; i < 20; i++) cands.push({ id: 200 + i, title: 'D' + i, genre_ids: [80], ...base, hits: 4 });
+    for (let i = 0; i < 10; i++) cands.push({ id: 300 + i, title: 'C' + i, genre_ids: [35], ...base, hits: 0 });
+    const x = { prefs: Core.normalizePrefs({}), profile: Core.buildProfile([{ g: [80], ts: 1 }, { g: [35], ts: 1 }]), watched: {}, currentYear: 2026 };
+    const out = Core.rank(cands, x, 20);
+    assert.strictEqual(out.length, 20);
+    assert.strictEqual(out.filter(c => c.genre_ids[0] === 80).length, 12);
+});
+test('разнообразие не режет ряд, если других кандидатов нет', () => {
+    const cands = [];
+    for (let i = 0; i < 20; i++) cands.push({ id: 400 + i, title: 'D' + i, genre_ids: [80], ...base });
+    const x = { prefs: Core.normalizePrefs({}), profile: Core.buildProfile([{ g: [80], ts: 1 }]), watched: {}, currentYear: 2026 };
+    assert.strictEqual(Core.rank(cands, x, 20).length, 20);
+});
+
 // ---- предпочтения ----
 test('жанры из текста: точное совпадение', () => {
     assert.deepStrictEqual(Core.genreIdsFromText('драма, ужасы'), [18, 27]);
@@ -164,7 +193,6 @@ function ctx(prefsRaw, items, watched) {
         currentYear: YEAR
     };
 }
-const base = { vote_average: 7, vote_count: 500, original_language: 'en', release_date: '2020-01-01' };
 
 test('уже просмотренное исключается', () => {
     const c = { id: 10, title: 'A', genre_ids: [18], ...base };

@@ -227,6 +227,7 @@
             s += 2.5 * Math.min(cand.hits || 0, 4);
 
             gs.forEach(function (g) {
+                s -= 2 * ((profile.neg && profile.neg[g]) || 0);
                 s += 2 * (profile.genres[g] || 0);
                 if (prefs.liked.indexOf(g) >= 0) s += 1.5;
             });
@@ -248,7 +249,31 @@
                 if (s !== null) out.push({ card: c, score: s });
             });
             out.sort(function (a, b) { return b.score - a.score; });
-            return out.slice(0, limit || 20).map(function (x) { return x.card; });
+            return diversify(out, ctx.profile, limit || 20).map(function (x) { return x.card; });
+        }
+
+        // Разнообразие: карточек с одним главным жанром (самый весомый в профиле, без служебного 16)
+        // не больше 60% ряда; пропущенные добираются в конец, если ряд иначе не заполнить
+        function diversify(sorted, profile, limit) {
+            var cap = Math.max(1, Math.ceil(limit * 0.6));
+            var counts = {};
+            var picked = [];
+            var rest = [];
+            sorted.forEach(function (x) {
+                if (picked.length >= limit) return;
+                var main = 0;
+                var best = -1;
+                genreIds(x.card).forEach(function (g) {
+                    if (g === 16) return;
+                    var w = (profile && profile.genres && profile.genres[g]) || 0;
+                    if (w > best) { best = w; main = g; }
+                });
+                if (main && (counts[main] || 0) >= cap) { rest.push(x); return; }
+                if (main) counts[main] = (counts[main] || 0) + 1;
+                picked.push(x);
+            });
+            for (var i = 0; i < rest.length && picked.length < limit; i++) picked.push(rest[i]);
+            return picked;
         }
 
         // История Lampa хранит урезанные карточки без жанров. details: ответ TMDB tv/{id} или movie/{id}.
@@ -353,12 +378,12 @@
     // ряды и настройки регистрируются по два раза
     if (window.aiadvisor_loaded) return;
     window.aiadvisor_loaded = true;
-    window.aiadvisor_version = '0.9';
+    window.aiadvisor_version = '0.12';
 
     // =====================================================================
     //  Часть Lampa
     // =====================================================================
-    var VERSION = '0.9';
+    var VERSION = '0.12';
     var HOST = '{localhost}';
     var TOKEN = '{token}';
     var CACHE_HOURS = 6;
@@ -435,6 +460,7 @@
                     (json.results || []).forEach(function (r) {
                         r.media_type = req.media;
                         r._w = req.weight || 1;
+                        if (req.seed) r._s = req.seed;
                         results.push(r);
                     });
                     release();
@@ -615,12 +641,16 @@
                 postJournal(list, changed.length > 0);
 
                 var grouped = group(map);
-                var data = { journal: journal, snapshot: snapshot, merged: grouped, enriched: changed.length };
-                prepared = { ts: Date.now(), data: data };
+                var favCount = addFavorites(grouped.watched);
 
-                var waiters = preparing;
-                preparing = null;
-                waiters.forEach(function (f) { f(data); });
+                loadThrown(function (thrown) {
+                    var data = { journal: journal, snapshot: snapshot, merged: grouped, enriched: changed.length, thrown: thrown, favCount: favCount };
+                    prepared = { ts: Date.now(), data: data };
+
+                    var waiters = preparing;
+                    preparing = null;
+                    waiters.forEach(function (f) { f(data); });
+                });
             });
         });
     }
@@ -666,7 +696,7 @@
         profile.seeds.slice(0, SEEDS).forEach(function (seed, rank) {
             seed.weight = 1 / (1 + 0.05 * rank);
             ['recommendations', 'similar'].forEach(function (kind) {
-                requests.push({ method: seed.media + '/' + seed.id + '/' + kind, params: {}, media: seed.media, weight: seed.weight });
+                requests.push({ method: seed.media + '/' + seed.id + '/' + kind, params: {}, media: seed.media, weight: seed.weight, seed: seed.t });
             });
         });
 
@@ -697,12 +727,13 @@
             var snapshot = data.snapshot;
             var merged = data.merged;
             var items = merged.byCat[cat] || [];
-            var sig = JSON.stringify(rawPrefs(cat)) + '|' + items.slice(0, SEEDS).map(function (i) { return i.media + i.id; }).join(',');
+            var sig = JSON.stringify(rawPrefs(cat)) + '|' + data.favCount + '|' + Object.keys(data.thrown || {}).length + '|' + items.slice(0, SEEDS).map(function (i) { return i.media + i.id; }).join(',');
 
             var cached = cacheGet(cat, sig);
             if (cached) return cb(cached);
 
             var profile = Core.buildProfile(items);
+            profile.neg = negativeGenres(data.thrown || {}, cat);
 
             if (debug) {
                 console.log('[aiadvisor] версия', VERSION);
@@ -711,6 +742,7 @@
                 console.log('[aiadvisor] категория', cat, ': записей', items.length, '; опорные:',
                     profile.seeds.slice(0, SEEDS).map(function (i) { return i.t + ' (' + i.media + ' ' + i.id + ')'; }).join(' | '));
                 console.log('[aiadvisor] жанры профиля:', JSON.stringify(profile.genres), 'языки:', JSON.stringify(profile.langs));
+                console.log('[aiadvisor] закладки Lampa (исключены из рядов):', data.favCount, '; «брошено», минус по жанрам:', JSON.stringify(profile.neg));
             }
 
             fetchAll(buildRequests(cat, prefs, profile), function (raw) {
@@ -718,9 +750,14 @@
                 raw.forEach(function (r) {
                     var k = Core.seenKey(Core.mediaOf(r), r.id);
                     var w = r._w || 1;
+                    var seedTitle = r._s;
                     delete r._w;
-                    if (map[k]) map[k].hits += w;
-                    else { r.hits = w; map[k] = r; }
+                    delete r._s;
+                    var cur = map[k];
+                    if (cur) cur.hits += w;
+                    else { r.hits = w; r.whyW = 0; map[k] = r; cur = r; }
+                    // «почему»: опорная запись, от которой пришла рекомендация (самая весомая)
+                    if (seedTitle && w > cur.whyW) { cur.why = seedTitle; cur.whyW = w; }
                 });
 
                 var cands = [];
@@ -740,6 +777,9 @@
                     currentYear: new Date().getFullYear()
                 };
                 var results = Core.rank(cands, rankCtx, 20);
+                results.forEach(function (c) {
+                    if (c.why) c.overview = 'Потому что вы смотрели «' + c.why + '». ' + (c.overview || '');
+                });
 
                 if (debug) {
                     console.log('[aiadvisor] запросов к TMDB:', raw.length ? 'получено ' + raw.length + ' карточек' : 'пусто', '; кандидатов категории:', cands.length, '; исключено по таймлайну:', skippedTimeline);
@@ -855,6 +895,76 @@
         if (prefs.disliked.length) parts.push('скрываю жанры: ' + genreNames(prefs.disliked));
         if (prefs.stop.length) parts.push('стоп-слов: ' + prefs.stop.length);
         return parts.join(' · ');
+    }
+
+    // Списки закладок Lampa: всё, что уже в них есть, в рекомендации не попадает
+    var FAV_TYPES = ['book', 'like', 'wath', 'look', 'viewed', 'scheduled', 'continued', 'thrown'];
+
+    function favoriteCards(type) {
+        try { return Lampa.Favorite.get({ type: type }) || []; } catch (e) { return []; }
+    }
+
+    function addFavorites(watched) {
+        var n = 0;
+        FAV_TYPES.forEach(function (t) {
+            favoriteCards(t).forEach(function (c) {
+                if (!c || !c.id) return;
+                watched[Core.seenKey(Core.mediaOf(c), c.id)] = true;
+                n++;
+            });
+        });
+        return n;
+    }
+
+    // «Брошено» — отрицательный сигнал («не интересно»): жанры и категория берутся из карточки
+    // или дозапрашиваются у TMDB и кэшируются
+    function loadThrown(cb) {
+        var list = favoriteCards('thrown').slice(0, 30);
+        var cache = Lampa.Storage.get('aiadvisor_thrown', '');
+        if (!cache || typeof cache !== 'object') cache = {};
+        var out = {};
+        var todo = [];
+
+        list.forEach(function (c) {
+            if (!c || !c.id) return;
+            var media = Core.mediaOf(c);
+            var k = Core.seenKey(media, c.id);
+            if (cache[k]) { out[k] = cache[k]; return; }
+            if (Core.genreIds(c).length) { out[k] = { cat: Core.categoryOf(c), g: Core.genreIds(c) }; cache[k] = out[k]; return; }
+            todo.push({ k: k, media: media, id: c.id });
+        });
+
+        var left = todo.length;
+        function finish() {
+            try { Lampa.Storage.set('aiadvisor_thrown', cache); } catch (e) { /* без кэша */ }
+            cb(out);
+        }
+        if (!left) return finish();
+        todo.forEach(function (t) {
+            tmdbGet(t.media + '/' + t.id, {}, function (d) {
+                if (d) {
+                    d.media_type = t.media;
+                    var g = Core.genreIds(d);
+                    if (g.length) { out[t.k] = { cat: Core.categoryOf(d), g: g }; cache[t.k] = out[t.k]; }
+                }
+                if (--left === 0) finish();
+            }, function () {
+                if (--left === 0) finish();
+            });
+        });
+    }
+
+    // Доля «брошенных» записей категории, где есть жанр, с плавным ростом: одна запись не доминирует
+    function negativeGenres(thrown, cat) {
+        var items = [];
+        for (var k in thrown) if (thrown[k].cat === cat) items.push(thrown[k]);
+        if (!items.length) return {};
+        var counts = {};
+        items.forEach(function (it) { it.g.forEach(function (g) { counts[g] = (counts[g] || 0) + 1; }); });
+        var scale = Math.min(1, items.length / 3);
+        var neg = {};
+        for (var g in counts) neg[g] = (counts[g] / items.length) * scale;
+        return neg;
     }
 
     // Просмотр по таймлайну Lampa (прогресс серий/фильма) есть и у тех, кого нет в «Истории».
@@ -984,6 +1094,12 @@
     }
 
     // Диагностика в консоли браузера: aiadvisorDebug('anime') | 'cartoon' | 'tv' | 'movie'
+    // Сброс общей подготовки (30 с) и кэша рядов: для диагностики
+    window.aiadvisorReset = function () {
+        prepared = null;
+        Core.CATS.forEach(function (c) { Lampa.Storage.set('aiadvisor_' + c + '_cache', ''); });
+    };
+
     window.aiadvisorDebug = function (cat) {
         cat = cat || 'anime';
         Lampa.Storage.set(storageKey(cat, 'cache'), '');
