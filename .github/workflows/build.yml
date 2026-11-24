@@ -1,0 +1,50 @@
+name: build
+
+# Проверка перед выкладкой: тесты логики плагина и сборка C# против актуального дерева lampac-nextgen.
+# Если всё прошло, ветка stable переводится на проверенный коммит. Сервер берёт модуль из stable.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: module
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Тесты плагина
+        working-directory: module
+        run: |
+          node tests/core.test.js
+          node tests/lampa-sim.test.js
+
+      - uses: actions/checkout@v4
+        with:
+          repository: lampac-nextgen/lampac
+          path: lampac
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Сборка модуля против дерева lampac
+        run: |
+          mkdir -p lampac/Modules
+          cp -r module/AiAdvisor lampac/Modules/AiAdvisor
+          dotnet build lampac/Modules/AiAdvisor/AiAdvisor.csproj -c Release
+
+      - name: Перевести stable на проверенный коммит
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        working-directory: module
+        run: git push origin "${GITHUB_SHA}:refs/heads/stable" --force
