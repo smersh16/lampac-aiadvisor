@@ -329,12 +329,12 @@
     // ряды и настройки регистрируются по два раза
     if (window.aiadvisor_loaded) return;
     window.aiadvisor_loaded = true;
-    window.aiadvisor_version = '0.4';
+    window.aiadvisor_version = '0.5';
 
     // =====================================================================
     //  Часть Lampa
     // =====================================================================
-    var VERSION = '0.4';
+    var VERSION = '0.5';
     var HOST = '{localhost}';
     var TOKEN = '{token}';
     var CACHE_HOURS = 6;
@@ -834,6 +834,13 @@
             component: 'aiadvisor',
             name: 'Рекомендации для вас',
             icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.5 5.5L20 9.3l-4 4 1 5.7-5-2.7-5 2.7 1-5.7-4-4 5.5-.8z"></path></svg>'
+        });
+
+        // Версия плагина: текст задан сразу, не зависит от загрузки данных
+        Lampa.SettingsApi.addParam({
+            component: 'aiadvisor',
+            param: { name: 'aiadvisor_version', type: 'static' },
+            field: { name: 'Версия плагина', description: VERSION }
         });
 
         Core.CATS.forEach(function (cat) {

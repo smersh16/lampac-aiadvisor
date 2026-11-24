@@ -97,6 +97,8 @@ function run(name) {
     assert.deepStrictEqual(rows.map(r => r.name), ['aiadvisor_anime', 'aiadvisor_cartoon', 'aiadvisor_tv', 'aiadvisor_movie']);
     assert.ok(rows.every(r => r.screen.includes('main')));
     assert.ok(settings.length > 20, 'настройки зарегистрированы');
+    const ver = settings.find(p => p.param.name === 'aiadvisor_version');
+    assert.ok(ver && ver.field.description === '0.5', 'версия показана в настройках');
 
     // повторная загрузка плагина не дублирует ряды и настройки
     const settingsBefore = settings.length;
