@@ -46,6 +46,25 @@ test('toSeen кладёт категорию, год, жанры', () => {
     assert.deepStrictEqual(s, { id: 1, media: 'tv', cat: 'anime', t: 'Naruto', y: 2002, g: [16], l: 'ja', ts: 5 });
 });
 
+// ---- обогащение урезанных карточек истории ----
+test('enrich: запись без жанров становится аниме после ответа TMDB', () => {
+    const item = { id: 1, media: 'tv', cat: 'tv', t: 'Наруто', y: 0, g: [], l: 'ja', ts: 7 };
+    const out = Core.enrich(item, { genres: [{ id: 16 }, { id: 10759 }], original_language: 'ja', origin_country: ['JP'], first_air_date: '2002-10-03' });
+    assert.strictEqual(out.cat, 'anime');
+    assert.deepStrictEqual(out.g, [16, 10759]);
+    assert.strictEqual(out.y, 2002);
+    assert.strictEqual(out.ts, 7);
+    assert.strictEqual(item.cat, 'tv', 'исходная запись не изменена');
+});
+test('enrich: мультфильм на английском остаётся мультфильмом', () => {
+    const out = Core.enrich({ id: 2, media: 'movie', cat: 'movie', t: 'Коко', y: 0, g: [], l: 'en', ts: 1 },
+        { genres: [{ id: 16 }, { id: 10751 }], original_language: 'en', release_date: '2017-10-27' });
+    assert.strictEqual(out.cat, 'cartoon');
+});
+test('enrich: без жанров в ответе возвращает null', () => {
+    assert.strictEqual(Core.enrich({ id: 3, media: 'tv', g: [], l: 'en', ts: 1 }, { genres: [] }), null);
+});
+
 // ---- предпочтения ----
 test('жанры из текста: точное совпадение', () => {
     assert.deepStrictEqual(Core.genreIdsFromText('драма, ужасы'), [18, 27]);

@@ -11,6 +11,11 @@ const settings = [];
 const tmdbCalls = [];
 const posts = [];
 
+const tmdbDetails = {
+    'tv/1': { id: 1, genres: [{ id: 16 }, { id: 10759 }], original_language: 'ja', origin_country: ['JP'], first_air_date: '2002-10-03' },
+    'movie/2': { id: 2, genres: [{ id: 28 }, { id: 878 }], original_language: 'en', release_date: '2010-07-15' }
+};
+
 const tmdbData = {
     // рекомендации к аниме-сериалу 1
     'tv/1/recommendations': [
@@ -52,8 +57,8 @@ global.Lampa = {
             tmdb: {
                 get: (method, params, ok) => {
                     tmdbCalls.push({ method, params });
-                    const key = method.replace(/\/\d+\//, (m) => m);
-                    const results = tmdbData[key] || [];
+                    if (tmdbDetails[method]) return setTimeout(() => ok({ ...tmdbDetails[method] }), 0);
+                    const results = tmdbData[method] || [];
                     setTimeout(() => ok({ results: results.map(r => ({ ...r })) }), 0);
                 }
             }
@@ -61,8 +66,8 @@ global.Lampa = {
     },
     Favorite: {
         get: () => [
-            { id: 1, name: 'Наруто', first_air_date: '2002-10-03', genre_ids: [16, 10759], original_language: 'ja' },
-            { id: 2, title: 'Начало', release_date: '2010-07-15', genre_ids: [28, 878], original_language: 'en' }
+            { id: 1, name: 'Наруто', first_air_date: '2002-10-03', original_language: 'ja' },
+            { id: 2, title: 'Начало', release_date: '2010-07-15', original_language: 'en' }
         ]
     },
     ContentRows: { add: (row) => rows.push(row) },
@@ -110,10 +115,14 @@ function run(name) {
     assert.strictEqual(ids[0], 50, 'карточка с двумя попаданиями первая');
     assert.strictEqual(anime.title, 'Для вас: Аниме');
 
-    // журнал отправлен на сервер, в нём 2 записи с категориями anime и movie
+    // жанры дозапрошены один раз, хотя рядов четыре; в журнале записи с жанрами и верной категорией
+    assert.strictEqual(tmdbCalls.filter(c => c.method === 'tv/1').length, 1, 'детали сериала запрошены один раз');
+    assert.strictEqual(tmdbCalls.filter(c => c.method === 'movie/2').length, 1, 'детали фильма запрошены один раз');
     const seenPost = posts.find(p => Array.isArray(p.body));
     assert.ok(seenPost, 'журнал отправлен');
     assert.deepStrictEqual(seenPost.body.map(i => i.cat).sort(), ['anime', 'movie']);
+    assert.ok(seenPost.body.every(i => i.g.length > 0), 'в журнал ушли записи с жанрами');
+    assert.ok(tmdbCalls.some(c => c.method === 'tv/1/recommendations'), 'рекомендации запрошены по обогащённой записи');
 
     // мультфильмы: просмотренного нет, кандидаты только из подборки, аниме среди них нет
     const cartoon = await run('aiadvisor_cartoon');

@@ -118,15 +118,43 @@ public class AiAdvisorController : BaseController
                 if (item == null)
                     continue;
 
-                string cat = item.Value<string>("cat");
                 string key = item.Value<string>("media") + ":" + item.Value<long>("id");
                 long ts = item.Value<long>("ts");
 
+                // прежняя запись ищется во всех категориях: при обогащении категория меняется
+                JObject old = null;
+                foreach (var c in cats)
+                {
+                    if (seen[c] is JObject oldList && oldList[key] is JObject found)
+                    {
+                        old = found;
+                        break;
+                    }
+                }
+
+                if (old != null)
+                {
+                    bool oldHasGenres = old["g"] is JArray oldGenres && oldGenres.Count > 0;
+                    bool newHasGenres = item["g"] is JArray newGenres && newGenres.Count > 0;
+                    long oldTs = old.Value<long?>("ts") ?? 0;
+
+                    if (oldHasGenres && !newHasGenres)
+                    {
+                        // урезанная карточка истории (без жанров) не затирает обогащённую запись:
+                        // сохраняем жанры, язык и категорию, обновляем только время
+                        item["g"] = old["g"].DeepClone();
+                        item["l"] = old["l"]?.DeepClone() ?? item["l"];
+                        item["cat"] = old["cat"]?.DeepClone() ?? item["cat"];
+                        item["ts"] = Math.Max(oldTs, ts);
+                    }
+                    else if (oldTs >= ts && !(newHasGenres && !oldHasGenres))
+                    {
+                        continue;
+                    }
+                }
+
+                string cat = item.Value<string>("cat");
                 var list = seen[cat] as JObject ?? new JObject();
-
-                if (list[key] is JObject old && (old.Value<long?>("ts") ?? 0) >= ts)
-                    continue;
-
                 list[key] = item;
                 seen[cat] = list;
 

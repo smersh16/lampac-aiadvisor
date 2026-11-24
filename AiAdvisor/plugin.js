@@ -229,8 +229,38 @@
             return out.slice(0, limit || 20).map(function (x) { return x.card; });
         }
 
+        // История Lampa хранит урезанные карточки без жанров. details: ответ TMDB tv/{id} или movie/{id}.
+        // Возвращает новую запись журнала с жанрами, языком, категорией; null, если жанров нет.
+        function enrich(item, details) {
+            if (!item || !details) return null;
+
+            var card = {
+                id: item.id,
+                media_type: item.media,
+                genres: details.genres,
+                genre_ids: details.genre_ids,
+                original_language: details.original_language || item.l,
+                origin_country: details.origin_country,
+                production_countries: details.production_countries,
+                release_date: details.release_date,
+                first_air_date: details.first_air_date
+            };
+
+            var g = genreIds(card);
+            if (!g.length) return null;
+
+            var out = {};
+            for (var k in item) out[k] = item[k];
+            out.g = g.slice(0, 10);
+            out.l = String(card.original_language || '').toLowerCase().slice(0, 8);
+            out.cat = categoryOf(card);
+            out.y = yearOf(card) || item.y || 0;
+            return out;
+        }
+
         return {
             CATS: CATS,
+            enrich: enrich,
             CAT_TITLES: CAT_TITLES,
             GENRES: GENRES,
             mediaOf: mediaOf,
@@ -263,6 +293,7 @@
     var CACHE_HOURS = 6;
     var SEEDS = 8;
     var PARALLEL = 4;
+    var ENRICH_MAX = 40;
 
     var ready = false;
 
@@ -370,8 +401,9 @@
         return out;
     }
 
-    function postJournal(items) {
-        if (!items.length || Date.now() - lastPost < 60000) return;
+    function postJournal(items, force) {
+        if (!items.length) return;
+        if (!force && Date.now() - lastPost < 60000) return;
         lastPost = Date.now();
         var net = new Lampa.Reguest();
         net.silent(apiUrl('/aiadvisor/seen'), function () { }, function () { }, JSON.stringify(items), {
@@ -379,24 +411,121 @@
         });
     }
 
-    function mergeSeen(serverSeen, snapshot) {
-        // snapshot актуальнее сервера: ключ media:id, берём большее ts
+    function hasGenres(it) {
+        return !!(it && it.g && it.g.length);
+    }
+
+    // Журнал сервера и снимок истории в один словарь media:id. Снимок свежее, но карточки истории
+    // урезаны (без жанров): такая запись не затирает обогащённую из журнала, только обновляет время.
+    function mergeMap(serverSeen, snapshot) {
         var map = {};
         Core.CATS.forEach(function (cat) {
-            var list = serverSeen[cat] || [];
-            list.forEach(function (it) { map[Core.seenKey(it.media, it.id)] = it; });
+            (serverSeen[cat] || []).forEach(function (it) { map[Core.seenKey(it.media, it.id)] = it; });
         });
         snapshot.forEach(function (it) {
             var k = Core.seenKey(it.media, it.id);
-            if (!map[k] || (map[k].ts || 0) < it.ts) map[k] = it;
+            var old = map[k];
+            if (hasGenres(old) && !hasGenres(it)) {
+                old.ts = Math.max(old.ts || 0, it.ts);
+                return;
+            }
+            if (!old || (old.ts || 0) < it.ts || (!hasGenres(old) && hasGenres(it))) map[k] = it;
         });
+        return map;
+    }
+
+    function group(map) {
         var byCat = { anime: [], cartoon: [], tv: [], movie: [] };
         var watched = {};
-        for (var k2 in map) {
-            watched[k2] = true;
-            if (byCat[map[k2].cat]) byCat[map[k2].cat].push(map[k2]);
+        for (var k in map) {
+            watched[k] = true;
+            if (byCat[map[k].cat]) byCat[map[k].cat].push(map[k]);
         }
         return { byCat: byCat, watched: watched };
+    }
+
+    // Дозапрос жанров у TMDB для записей без них: до ENRICH_MAX за раз, самые свежие первыми.
+    // Записи, по которым TMDB жанров не дал, неделю не перепроверяются.
+    function enrichMissing(map, done) {
+        var skip = Lampa.Storage.get('aiadvisor_enrich_skip', '');
+        if (!skip || typeof skip !== 'object') skip = {};
+        var now = Date.now();
+
+        var todo = [];
+        for (var k in map) {
+            if (hasGenres(map[k])) continue;
+            if (skip[k] && now - skip[k] < 7 * 86400000) continue;
+            todo.push(map[k]);
+        }
+        todo.sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); });
+        todo = todo.slice(0, ENRICH_MAX);
+        if (!todo.length) return done([]);
+
+        var changed = [];
+        var left = todo.length;
+
+        function finish() {
+            if (--left === 0) {
+                Lampa.Storage.set('aiadvisor_enrich_skip', skip);
+                done(changed);
+            }
+        }
+
+        todo.forEach(function (it) {
+            var key = Core.seenKey(it.media, it.id);
+            enqueue(function (release) {
+                tmdbGet(it.media + '/' + it.id, {}, function (json) {
+                    var fresh = Core.enrich(it, json);
+                    if (fresh) {
+                        map[key] = fresh;
+                        changed.push(fresh);
+                    } else {
+                        skip[key] = now;
+                    }
+                    release();
+                    finish();
+                }, function () {
+                    release();
+                    finish();
+                });
+            });
+        });
+    }
+
+    // Общая подготовка для всех рядов: четыре ряда запрашиваются одновременно, а журнал,
+    // снимок и дозапрос жанров нужны один раз
+    var preparing = null;
+    var prepared = null;
+
+    function prepare(cb) {
+        if (prepared && Date.now() - prepared.ts < 30000) return cb(prepared.data);
+        if (preparing) return preparing.push(cb);
+        preparing = [cb];
+
+        loadJournal(function (journal) {
+            var snapshot = snapshotHistory();
+            var map = mergeMap(journal.seen || {}, snapshot);
+
+            enrichMissing(map, function (changed) {
+                var post = {};
+                changed.forEach(function (it) { post[Core.seenKey(it.media, it.id)] = it; });
+                snapshot.forEach(function (it) {
+                    var k = Core.seenKey(it.media, it.id);
+                    post[k] = map[k] || it;
+                });
+                var list = [];
+                for (var k in post) list.push(post[k]);
+                postJournal(list, changed.length > 0);
+
+                var grouped = group(map);
+                var data = { journal: journal, snapshot: snapshot, merged: grouped, enriched: changed.length };
+                prepared = { ts: Date.now(), data: data };
+
+                var waiters = preparing;
+                preparing = null;
+                waiters.forEach(function (f) { f(data); });
+            });
+        });
     }
 
     // ---- кэш результата на устройстве ----
@@ -464,11 +593,10 @@
         var prefs = Core.normalizePrefs(rawPrefs(cat));
         if (!prefs.enabled) return cb([]);
 
-        loadJournal(function (journal) {
-            var snapshot = snapshotHistory();
-            postJournal(snapshot);
-
-            var merged = mergeSeen(journal.seen || {}, snapshot);
+        prepare(function (data) {
+            var journal = data.journal;
+            var snapshot = data.snapshot;
+            var merged = data.merged;
             var items = merged.byCat[cat] || [];
             var sig = JSON.stringify(rawPrefs(cat)) + '|' + items.slice(0, SEEDS).map(function (i) { return i.media + i.id; }).join(',');
 
@@ -478,8 +606,8 @@
             var profile = Core.buildProfile(items);
 
             if (debug) {
-                console.log('[aiadvisor] история Lampa:', snapshot.length, 'записей; журнал сервера по категориям:',
-                    Core.CATS.map(function (c) { return c + '=' + ((journal.seen && journal.seen[c] || []).length); }).join(' '));
+                console.log('[aiadvisor] история Lampa:', snapshot.length, 'записей; дозапрошено жанров:', data.enriched, '; после обогащения по категориям:',
+                    Core.CATS.map(function (c) { return c + '=' + (merged.byCat[c] || []).length; }).join(' '));
                 console.log('[aiadvisor] категория', cat, ': записей', items.length, '; опорные:',
                     profile.seeds.slice(0, SEEDS).map(function (i) { return i.t + ' (' + i.media + ' ' + i.id + ')'; }).join(' | '));
                 console.log('[aiadvisor] жанры профиля:', JSON.stringify(profile.genres), 'языки:', JSON.stringify(profile.langs));
@@ -634,6 +762,7 @@
         cat = cat || 'anime';
         Lampa.Storage.set(storageKey(cat, 'cache'), '');
         lastPost = 0;
+        prepared = null;
         recommend(cat, function (results) {
             console.log('[aiadvisor] готово,', results.length, 'карточек');
         }, true);
