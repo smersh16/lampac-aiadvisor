@@ -81,6 +81,7 @@ global.Lampa = {
             { id: 2, title: 'Начало', release_date: '2010-07-15', original_language: 'en' }
         ]
     },
+    Timeline: { watched: (c) => (global.__watchedIds || []).includes(c.id) ? 100 : 0 },
     ContentRows: { add: (row) => rows.push(row) },
     Settings: { listener: { follow: (name, fn) => { if (name === 'open') openHandlers.push(fn); } } },
     SettingsApi: {
@@ -104,7 +105,7 @@ function run(name) {
     assert.ok(rows.every(r => r.screen.includes('main')));
     assert.ok(settings.length > 20, 'настройки зарегистрированы');
     const ver = settings.find(p => p.param.name === 'aiadvisor_version');
-    assert.ok(ver && ver.field.description === '0.6', 'версия показана в настройках');
+    assert.ok(ver && ver.field.description === '0.7', 'версия показана в настройках');
 
     // повторная загрузка плагина не дублирует ряды и настройки
     const settingsBefore = settings.length;
@@ -160,6 +161,15 @@ function run(name) {
     const newCalls = tmdbCalls.slice(before2).filter(c => c.method === 'discover/tv');
     assert.deepStrictEqual([...new Set(newCalls.map(c => c.params.filter.with_original_language))], ['ja']);
     store['aiadvisor_anime_langs'] = '';
+    store['aiadvisor_anime_cache'] = '';
+
+    // просмотр по таймлайну Lampa (нет в истории) исключает карточку; нужны original_*
+    global.__watchedIds = [50];
+    store['aiadvisor_anime_cache'] = '';
+    tmdbData['tv/1/recommendations'][0].original_name = 'Other Anime';
+    const tl = (await run('aiadvisor_anime')).results.map(r => r.id);
+    assert.ok(!tl.includes(50), 'просмотренное по таймлайну исключено');
+    global.__watchedIds = [];
     store['aiadvisor_anime_cache'] = '';
 
     // экран настроек: сводка по истории и текущие значения

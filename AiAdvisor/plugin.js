@@ -329,12 +329,12 @@
     // ряды и настройки регистрируются по два раза
     if (window.aiadvisor_loaded) return;
     window.aiadvisor_loaded = true;
-    window.aiadvisor_version = '0.6';
+    window.aiadvisor_version = '0.7';
 
     // =====================================================================
     //  Часть Lampa
     // =====================================================================
-    var VERSION = '0.6';
+    var VERSION = '0.7';
     var HOST = '{localhost}';
     var TOKEN = '{token}';
     var CACHE_HOURS = 6;
@@ -674,9 +674,13 @@
                 });
 
                 var cands = [];
+                var skippedTimeline = 0;
                 for (var k2 in map) {
                     // карточка из рекомендаций должна принадлежать той же категории
-                    if (Core.categoryOf(map[k2]) === cat) cands.push(map[k2]);
+                    if (Core.categoryOf(map[k2]) !== cat) continue;
+                    // просмотренное по таймлайну Lampa в рекомендации не попадает
+                    if (timelineWatched(map[k2])) { skippedTimeline++; continue; }
+                    cands.push(map[k2]);
                 }
 
                 var rankCtx = {
@@ -688,7 +692,7 @@
                 var results = Core.rank(cands, rankCtx, 20);
 
                 if (debug) {
-                    console.log('[aiadvisor] запросов к TMDB:', raw.length ? 'получено ' + raw.length + ' карточек' : 'пусто', '; кандидатов категории:', cands.length);
+                    console.log('[aiadvisor] запросов к TMDB:', raw.length ? 'получено ' + raw.length + ' карточек' : 'пусто', '; кандидатов категории:', cands.length, '; исключено по таймлайну:', skippedTimeline);
                     console.log('[aiadvisor] итог:', results.map(function (c) {
                         return (c.title || c.name) + ' [hits ' + Math.round(c.hits * 10) / 10 + ', score ' + Math.round(Core.score(c, rankCtx) * 10) / 10 + ']';
                     }).join(' | '));
@@ -801,6 +805,19 @@
         if (prefs.disliked.length) parts.push('скрываю жанры: ' + genreNames(prefs.disliked));
         if (prefs.stop.length) parts.push('стоп-слов: ' + prefs.stop.length);
         return parts.join(' · ');
+    }
+
+    // Просмотр по таймлайну Lampa (прогресс серий/фильма) есть и у тех, кого нет в «Истории».
+    // Lampa.Timeline.watched: сериал — серии 1–24 первого сезона по original_name, фильм — по original_title.
+    function timelineWatched(card) {
+        try {
+            if (!Lampa.Timeline || typeof Lampa.Timeline.watched !== 'function') return false;
+            if (!card.original_name && !card.original_title) return false;
+            var v = Lampa.Timeline.watched(card);
+            return Core.mediaOf(card) === 'tv' ? v > 0 : v >= 30;
+        } catch (e) {
+            return false;
+        }
     }
 
     var settingsBody = null;
