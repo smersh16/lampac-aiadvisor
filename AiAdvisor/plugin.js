@@ -329,12 +329,12 @@
     // ряды и настройки регистрируются по два раза
     if (window.aiadvisor_loaded) return;
     window.aiadvisor_loaded = true;
-    window.aiadvisor_version = '0.5';
+    window.aiadvisor_version = '0.6';
 
     // =====================================================================
     //  Часть Lampa
     // =====================================================================
-    var VERSION = '0.5';
+    var VERSION = '0.6';
     var HOST = '{localhost}';
     var TOKEN = '{token}';
     var CACHE_HOURS = 6;
@@ -804,16 +804,31 @@
     }
 
     var settingsBody = null;
+    var INFO_NAME = 'что видно в истории';
+    var NOW_NAME = 'сейчас применяется';
+
+    // Строки типа static в Lampa рисуются без data-name: ищем по тексту заголовка
+    function setDescr(name, text) {
+        var root = settingsBody && (settingsBody[0] || settingsBody);
+        if (!root || !root.querySelectorAll) return;
+        var rows = root.querySelectorAll('.settings-param[data-static="true"]');
+        for (var i = 0; i < rows.length; i++) {
+            var n = rows[i].querySelector('.settings-param__name');
+            if (n && n.textContent.trim() === name) {
+                var d = rows[i].querySelector('.settings-param__descr');
+                if (d) d.textContent = text;
+                return;
+            }
+        }
+    }
 
     function refreshInfo() {
         if (!settingsBody) return;
         prepare(function (data) {
             Core.CATS.forEach(function (cat) {
                 var items = data.merged.byCat[cat] || [];
-                var a = settingsBody.find('[data-name="aiadvisor_info_' + cat + '"] .settings-param__descr');
-                var b = settingsBody.find('[data-name="aiadvisor_now_' + cat + '"] .settings-param__descr');
-                if (a.length) a.text(infoText(cat, items));
-                if (b.length) b.text(effectiveText(cat, items));
+                setDescr(Core.CAT_TITLES[cat] + ': ' + INFO_NAME, infoText(cat, items));
+                setDescr(Core.CAT_TITLES[cat] + ': ' + NOW_NAME, effectiveText(cat, items));
             });
         });
     }
@@ -856,13 +871,13 @@
             Lampa.SettingsApi.addParam({
                 component: 'aiadvisor',
                 param: { name: 'aiadvisor_info_' + cat, type: 'static' },
-                field: { name: 'Что видно в вашей истории', description: 'Загрузка…' }
+                field: { name: t + ': ' + INFO_NAME, description: 'Загрузка…' }
             });
 
             Lampa.SettingsApi.addParam({
                 component: 'aiadvisor',
                 param: { name: 'aiadvisor_now_' + cat, type: 'static' },
-                field: { name: 'Сейчас применяется', description: 'Загрузка…' }
+                field: { name: t + ': ' + NOW_NAME, description: 'Загрузка…' }
             });
 
             Lampa.SettingsApi.addParam({

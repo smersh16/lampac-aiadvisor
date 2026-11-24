@@ -11,11 +11,17 @@ const settings = [];
 const tmdbCalls = [];
 const posts = [];
 const openHandlers = [];
-const infoEls = {};
+const rowsDom = {};
 function makeBody() {
-    return { find: (sel) => infoEls[sel] || (infoEls[sel] = { length: 1, value: '', text(v) { this.value = v; return this; } }) };
+    // имитация DOM: строки static с заголовком и описанием
+    const mk = (name) => rowsDom[name] || (rowsDom[name] = {
+        descr: { textContent: 'Загрузка…' },
+        querySelector(sel) { return sel.includes('name') ? { textContent: name } : this.descr; }
+    });
+    const names = [];
+    settings.filter(p => p.param.type === 'static').forEach(p => names.push(p.field.name));
+    return [{ querySelectorAll: () => names.map(mk) }];
 }
-
 const tmdbDetails = {
     'tv/1': { id: 1, genres: [{ id: 16 }, { id: 10759 }], original_language: 'ja', origin_country: ['JP'], first_air_date: '2002-10-03' },
     'movie/2': { id: 2, genres: [{ id: 28 }, { id: 878 }], original_language: 'en', release_date: '2010-07-15' }
@@ -98,7 +104,7 @@ function run(name) {
     assert.ok(rows.every(r => r.screen.includes('main')));
     assert.ok(settings.length > 20, 'настройки зарегистрированы');
     const ver = settings.find(p => p.param.name === 'aiadvisor_version');
-    assert.ok(ver && ver.field.description === '0.5', 'версия показана в настройках');
+    assert.ok(ver && ver.field.description === '0.6', 'версия показана в настройках');
 
     // повторная загрузка плагина не дублирует ряды и настройки
     const settingsBefore = settings.length;
@@ -161,8 +167,8 @@ function run(name) {
     openHandlers[0]({ name: 'other', body: makeBody() });
     openHandlers[0]({ name: 'aiadvisor', body: makeBody() });
     await new Promise(r => setTimeout(r, 50));
-    const info = infoEls['[data-name="aiadvisor_info_anime"] .settings-param__descr'].value;
-    const now = infoEls['[data-name="aiadvisor_now_anime"] .settings-param__descr'].value;
+    const info = rowsDom['Аниме: что видно в истории'].descr.textContent;
+    const now = rowsDom['Аниме: сейчас применяется'].descr.textContent;
     console.log('info:', info);
     console.log('now: ', now);
     assert.ok(info.includes('Записей: 1'), 'число записей группы');
@@ -175,7 +181,7 @@ function run(name) {
     store['aiadvisor_anime_liked'] = 'драма';
     openHandlers[0]({ name: 'aiadvisor', body: makeBody() });
     await new Promise(r => setTimeout(r, 50));
-    assert.ok(infoEls['[data-name="aiadvisor_now_anime"] .settings-param__descr'].value.includes('любимые жанры: драма (из настроек)'), 'настройки главнее истории');
+    assert.ok(rowsDom['Аниме: сейчас применяется'].descr.textContent.includes('любимые жанры: драма (из настроек)'), 'настройки главнее истории');
     store['aiadvisor_anime_liked'] = '';
 
     // кэш: повторный вызов не ходит в TMDB
