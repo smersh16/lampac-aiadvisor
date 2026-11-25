@@ -4,10 +4,11 @@
 Не часть модуля: ничего не меняет, читает export.json (его даёт aiadvisorExport в консоли Lampa)
 и печатает три списка. Ключ вводится скрыто и не сохраняется. Только стандартная библиотека.
 
-Запуск:  python3 gigachat_experiment.py [export.json] [ca.pem]
+Запуск:  [GIGACHAT_MODEL=GigaChat-3-Ultra] python3 gigachat_experiment.py [export.json] [ca.pem]
 """
 import getpass
 import json
+import os
 import re
 import ssl
 import sys
@@ -17,7 +18,7 @@ import uuid
 
 OAUTH = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
 CHAT = "https://api.giga.chat/v1/chat/completions"
-MODEL = "GigaChat-2"
+MODEL = os.environ.get("GIGACHAT_MODEL", "GigaChat-2")
 
 
 def post(url, headers, data, ctx, timeout=90):
