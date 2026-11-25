@@ -7,6 +7,7 @@ using Shared.Attributes;
 using Shared.Services;
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -215,7 +216,8 @@ public class AiAdvisorController : BaseController
 
             var clean = new JObject
             {
-                ["enabled"] = p["enabled"]?.Type == JTokenType.Boolean ? p.Value<bool>("enabled") : true
+                ["enabled"] = p["enabled"]?.Type == JTokenType.Boolean ? p.Value<bool>("enabled") : true,
+                ["ai"] = p["ai"]?.Type == JTokenType.Boolean && p.Value<bool>("ai")
             };
 
             foreach (var field in prefFields)
@@ -238,6 +240,74 @@ public class AiAdvisorController : BaseController
         }
 
         return ContentTo("{\"success\":true}", "application/json; charset=utf-8");
+    }
+    #endregion
+
+    #region /aiadvisor/ai
+    /// <summary>
+    /// Тело: { cat, history: [{ t, y, p, g }] }. Ответ: { success, error, taste, titles[] }.
+    /// Ключ GigaChat и сертификаты лежат на сервере (database/aiadvisor/ai.json, ca.pem).
+    /// </summary>
+    [HttpPost]
+    [Route("/aiadvisor/ai")]
+    async public Task<ActionResult> Ai()
+    {
+        string area = UserArea();
+        if (area == null)
+            return Fail();
+
+        var body = await ReadBody();
+        if (body is not JObject src || src["history"] is not JArray history)
+            return Fail();
+
+        string cat = src.Value<string>("cat");
+        if (Array.IndexOf(cats, cat) < 0)
+            return Fail();
+
+        var lines = new List<string>();
+        foreach (var token in history.Take(60))
+        {
+            if (token is not JObject h)
+                continue;
+
+            string title = Oneline(h.Value<string>("t"), 120);
+            if (title.Length == 0)
+                continue;
+
+            int year = h.Value<int?>("y") ?? 0;
+            int percent = h.Value<int?>("p") ?? -1;
+            string genres = Oneline(h.Value<string>("g"), 80);
+
+            var sb = new StringBuilder("- ").Append(title).Append(" (").Append(year > 0 ? year.ToString() : "?").Append(")");
+            if (percent >= 0)
+                sb.Append(", досмотрено ").Append(Math.Min(percent, 100)).Append('%');
+            if (genres.Length > 0)
+                sb.Append(" [").Append(genres).Append(']');
+
+            lines.Add(sb.ToString());
+        }
+
+        if (lines.Count == 0)
+            return Fail();
+
+        var result = await AiClient.Recommend(area + "|" + cat, cat, lines);
+
+        return ContentTo(JsonConvert.SerializeObject(new
+        {
+            success = result.Ok,
+            error = result.Error,
+            taste = result.Taste,
+            titles = result.Titles
+        }), "application/json; charset=utf-8");
+    }
+
+    static string Oneline(string value, int max)
+    {
+        if (string.IsNullOrEmpty(value))
+            return string.Empty;
+
+        value = value.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        return value.Length > max ? value.Substring(0, max) : value;
     }
     #endregion
 

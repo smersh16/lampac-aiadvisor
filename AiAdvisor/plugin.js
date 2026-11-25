@@ -137,6 +137,7 @@
             var minRating = parseFloat(String(raw.min_rating || '0').replace(',', '.'));
             return {
                 enabled: raw.enabled !== false,
+                ai: raw.ai === true,
                 liked: genreIdsFromText(raw.liked),
                 disliked: genreIdsFromText(raw.disliked),
                 stop: splitList(raw.stop),
@@ -276,6 +277,48 @@
             return picked;
         }
 
+        // ---- ИИ-подбор: названия от модели сопоставляются с TMDB ----
+        function normTitle(text) {
+            return String(text || '').toLowerCase().replace(/ё/g, 'е').replace(/[^a-zа-я0-9]+/g, ' ').trim();
+        }
+
+        // «Название (2019)» -> { title, year }
+        function parseAiTitle(line) {
+            var m = /^(.*?)\s*\((\d{4})\)\s*$/.exec(String(line || '').trim());
+            if (!m || !m[1].trim()) return null;
+            return { title: m[1].trim(), year: toInt(m[2]) };
+        }
+
+        // Из результатов поиска TMDB берём карточку, только если название совпало и год в пределах ±1:
+        // так выдуманные моделью названия отсеиваются
+        function matchAi(parsed, results, media) {
+            var want = normTitle(parsed.title);
+            for (var i = 0; i < (results || []).length; i++) {
+                var r = results[i];
+                var names = [r.title, r.name, r.original_title, r.original_name].map(normTitle);
+                if (names.indexOf(want) < 0) continue;
+                var y = yearOf(r);
+                if (parsed.year && y && Math.abs(y - parsed.year) > 1) continue;
+                r.media_type = media;
+                return r;
+            }
+            return null;
+        }
+
+        // Рекомендации ИИ занимают до slots мест, расставлены через две позиции; остальное — локальный подбор
+        function mergeAi(local, ai, limit, slots) {
+            var picked = ai.slice(0, Math.min(slots, limit));
+            if (!picked.length) return local;
+            var taken = {};
+            picked.forEach(function (c) { taken[seenKey(mediaOf(c), c.id)] = true; });
+            var out = local.filter(function (c) { return !taken[seenKey(mediaOf(c), c.id)]; }).slice(0, limit - picked.length);
+            picked.forEach(function (c, i) {
+                var pos = Math.min(1 + 3 * i, out.length);
+                out.splice(pos, 0, c);
+            });
+            return out;
+        }
+
         // История Lampa хранит урезанные карточки без жанров. details: ответ TMDB tv/{id} или movie/{id}.
         // Возвращает новую запись журнала с жанрами, языком, категорией; null, если жанров нет.
         function enrich(item, details) {
@@ -367,6 +410,10 @@
             score: score,
             untranslated: untranslated,
             completionWeight: completionWeight,
+            normTitle: normTitle,
+            parseAiTitle: parseAiTitle,
+            matchAi: matchAi,
+            mergeAi: mergeAi,
             rank: rank
         };
     })();
@@ -378,12 +425,12 @@
     // ряды и настройки регистрируются по два раза
     if (window.aiadvisor_loaded) return;
     window.aiadvisor_loaded = true;
-    window.aiadvisor_version = '0.13';
+    window.aiadvisor_version = '0.14';
 
     // =====================================================================
     //  Часть Lampa
     // =====================================================================
-    var VERSION = '0.13';
+    var VERSION = '0.14';
     var HOST = '{localhost}';
     var TOKEN = '{token}';
     var CACHE_HOURS = 6;
@@ -413,6 +460,7 @@
     function rawPrefs(cat) {
         return {
             enabled: Lampa.Storage.get(storageKey(cat, 'enabled'), true) !== false,
+            ai: Lampa.Storage.get(storageKey(cat, 'ai'), false) === true,
             liked: Lampa.Storage.get(storageKey(cat, 'liked'), ''),
             disliked: Lampa.Storage.get(storageKey(cat, 'disliked'), ''),
             stop: Lampa.Storage.get(storageKey(cat, 'stop'), ''),
@@ -718,6 +766,108 @@
         return requests;
     }
 
+    // ---- ИИ-подбор (необязательный): сервер спрашивает GigaChat, плагин проверяет названия через TMDB ----
+    var AI_SLOTS = 8;
+    var AI_TTL = 24 * 3600 * 1000;
+
+    function aiKey(cat) { return 'aiadvisor_ai_' + cat; }
+
+    function aiCached(cat) {
+        var c = Lampa.Storage.get(aiKey(cat), '');
+        return c && typeof c === 'object' ? c : null;
+    }
+
+    function fetchAi(cat, items, cb) {
+        var recent = items.slice().sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); }).slice(0, 60);
+        if (!recent.length) return cb(null);
+
+        var sig = recent.map(function (i) { return i.media + i.id + ':' + (i.p === undefined ? -1 : i.p); }).join(',');
+        var cached = aiCached(cat);
+        if (cached && cached.sig === sig && Date.now() - cached.ts < AI_TTL && cached.titles) return cb(cached);
+
+        var body = JSON.stringify({
+            cat: cat,
+            history: recent.map(function (i) {
+                return { t: i.t, y: i.y, p: i.p === undefined ? -1 : i.p, g: genreNames((i.g || []).filter(function (g) { return g !== 16; })) };
+            })
+        });
+
+        var net = new Lampa.Reguest();
+        net.timeout(100000);
+        net.silent(apiUrl('/aiadvisor/ai'), function (json) {
+            if (json && json.success && json.titles && json.titles.length) {
+                var entry = { sig: sig, ts: Date.now(), taste: json.taste || '', titles: json.titles };
+                Lampa.Storage.set(aiKey(cat), entry);
+                cb(entry);
+            } else {
+                // старые рекомендации лучше, чем никаких
+                cb(cached && cached.titles ? cached : { error: json && json.error || 'no_answer' });
+            }
+        }, function () {
+            cb(cached && cached.titles ? cached : { error: 'network' });
+        }, body, { headers: { 'Content-Type': 'application/json' } });
+    }
+
+    // Названия от модели -> карточки TMDB (поиск по названию и году, совпадение названия обязательно)
+    function resolveAi(cat, titles, cb) {
+        var medias = cat === 'tv' ? ['tv'] : cat === 'movie' ? ['movie'] : ['tv', 'movie'];
+        var parsed = titles.map(Core.parseAiTitle).filter(Boolean).slice(0, 25);
+        var found = new Array(parsed.length);
+        var left = parsed.length * medias.length;
+        if (!left) return cb([]);
+
+        function finish() {
+            var seen = {};
+            var out = [];
+            found.forEach(function (c) {
+                if (!c) return;
+                var k = Core.seenKey(Core.mediaOf(c), c.id);
+                if (seen[k]) return;
+                seen[k] = true;
+                out.push(c);
+            });
+            cb(out);
+        }
+
+        parsed.forEach(function (p, idx) {
+            medias.forEach(function (media) {
+                enqueue(function (release) {
+                    tmdbGet('search/' + media, { query: encodeURIComponent(p.title) }, function (json) {
+                        if (!found[idx]) found[idx] = Core.matchAi(p, json && json.results, media);
+                        release();
+                        if (--left === 0) finish();
+                    }, function () {
+                        release();
+                        if (--left === 0) finish();
+                    });
+                });
+            });
+        });
+    }
+
+    function withAi(cat, prefs, items, rankCtx, results, debug, done) {
+        if (!prefs.ai) return done(results);
+
+        fetchAi(cat, items, function (ai) {
+            if (!ai || !ai.titles) {
+                if (debug) console.log('[aiadvisor] ИИ недоступен:', ai && ai.error);
+                return done(results);
+            }
+            resolveAi(cat, ai.titles, function (cards) {
+                var valid = cards.filter(function (c) {
+                    return Core.categoryOf(c) === cat && Core.score(c, rankCtx) !== null && !timelineWatched(c);
+                });
+                valid.forEach(function (c) { c.overview = 'Рекомендует ИИ. ' + (c.overview || ''); });
+                if (debug) {
+                    console.log('[aiadvisor] ИИ: вкус —', ai.taste);
+                    console.log('[aiadvisor] ИИ: предложено', ai.titles.length, ', найдено в TMDB и прошло фильтры', valid.length, ':',
+                        valid.map(function (c) { return c.title || c.name; }).join(' | '));
+                }
+                done(Core.mergeAi(results, valid, 20, AI_SLOTS));
+            });
+        });
+    }
+
     function recommend(cat, cb, debug, limit) {
         var prefs = Core.normalizePrefs(rawPrefs(cat));
         if (!prefs.enabled) return cb([]);
@@ -788,8 +938,12 @@
                     }).join(' | '));
                 }
 
-                if (!limit) cacheSet(cat, sig, results);
-                cb(results);
+                if (limit) return cb(results);
+
+                withAi(cat, prefs, items, rankCtx, results, debug, function (final) {
+                    cacheSet(cat, sig, final);
+                    cb(final);
+                });
             });
         });
     }
@@ -842,6 +996,7 @@
                         if (p[name] !== undefined) Lampa.Storage.set(storageKey(cat, name), p[name]);
                     });
                     if (p.enabled !== undefined) Lampa.Storage.set(storageKey(cat, 'enabled'), p.enabled);
+                    if (p.ai !== undefined) Lampa.Storage.set(storageKey(cat, 'ai'), p.ai === true);
                 });
             }
             done && done();
@@ -983,6 +1138,7 @@
     var settingsBody = null;
     var INFO_NAME = 'что видно в истории';
     var NOW_NAME = 'сейчас применяется';
+    var AI_NAME = 'вкус по версии ИИ';
 
     // Строки типа static в Lampa рисуются без data-name: ищем по тексту заголовка
     function setDescr(name, text) {
@@ -1006,6 +1162,9 @@
                 var items = data.merged.byCat[cat] || [];
                 setDescr(Core.CAT_TITLES[cat] + ': ' + INFO_NAME, infoText(cat, items));
                 setDescr(Core.CAT_TITLES[cat] + ': ' + NOW_NAME, effectiveText(cat, items));
+                var ai = aiCached(cat);
+                var aiOn = Lampa.Storage.get(storageKey(cat, 'ai'), false) === true;
+                setDescr(Core.CAT_TITLES[cat] + ': ' + AI_NAME, !aiOn ? 'ИИ выключен' : (ai && ai.taste ? ai.taste : 'ещё не рассчитан: откройте главную'));
             });
         });
     }
@@ -1062,6 +1221,19 @@
                 param: { name: storageKey(cat, 'enabled'), type: 'trigger', default: true },
                 field: { name: 'Показывать ряд на главной', description: 'Ряд «Для вас: ' + t + '»' },
                 onChange: pushPrefs
+            });
+
+            Lampa.SettingsApi.addParam({
+                component: 'aiadvisor',
+                param: { name: storageKey(cat, 'ai'), type: 'trigger', default: false },
+                field: { name: 'Подбор с помощью ИИ', description: 'До ' + AI_SLOTS + ' мест в ряду от ИИ (GigaChat): на сервер уходят названия просмотренного. Нужна настройка сервера' },
+                onChange: pushPrefs
+            });
+
+            Lampa.SettingsApi.addParam({
+                component: 'aiadvisor',
+                param: { name: 'aiadvisor_aitaste_' + cat, type: 'static' },
+                field: { name: t + ': ' + AI_NAME, description: 'ИИ выключен' }
             });
 
             [

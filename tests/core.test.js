@@ -154,6 +154,36 @@ test('разнообразие не режет ряд, если других к�
     assert.strictEqual(Core.rank(cands, x, 20).length, 20);
 });
 
+// ---- ИИ-подбор ----
+test('parseAiTitle: название и год', () => {
+    assert.deepStrictEqual(Core.parseAiTitle('Мейр из Исттауна (2021)'), { title: 'Мейр из Исттауна', year: 2021 });
+    assert.strictEqual(Core.parseAiTitle('без года'), null);
+});
+test('matchAi: совпадение названия и года ±1', () => {
+    const res = [{ id: 1, name: 'Другое', first_air_date: '2021-01-01' }, { id: 2, name: 'Мейр из Исттауна', original_name: 'Mare of Easttown', first_air_date: '2021-04-18' }];
+    assert.strictEqual(Core.matchAi({ title: 'мейр из исттауна', year: 2021 }, res, 'tv').id, 2);
+    assert.strictEqual(Core.matchAi({ title: 'Mare of Easttown', year: 2020 }, res, 'tv').id, 2);
+});
+test('matchAi: выдуманное название или чужой год отбрасываются', () => {
+    const res = [{ id: 2, name: 'Мейр из Исттауна', first_air_date: '2021-04-18' }];
+    assert.strictEqual(Core.matchAi({ title: 'Тайны Ла-Манчи', year: 2021 }, res, 'tv'), null);
+    assert.strictEqual(Core.matchAi({ title: 'Мейр из Исттауна', year: 2015 }, res, 'tv'), null);
+});
+test('mergeAi: места ИИ ограничены, без дублей, длина по лимиту', () => {
+    const local = []; for (let i = 0; i < 20; i++) local.push({ id: i + 1, name: 'L' + i, first_air_date: '2020-01-01' });
+    const ai = []; for (let i = 0; i < 10; i++) ai.push({ id: 100 + i, name: 'A' + i, first_air_date: '2020-01-01', media_type: 'tv' });
+    ai.push({ id: 3, name: 'L2', first_air_date: '2020-01-01', media_type: 'tv' });
+    const out = Core.mergeAi(local, ai, 20, 8);
+    assert.strictEqual(out.length, 20);
+    assert.strictEqual(out.filter(c => c.id >= 100).length, 8);
+    assert.strictEqual(new Set(out.map(c => c.id)).size, 20);
+    assert.strictEqual(out[1].id, 100);
+});
+test('mergeAi: без карточек ИИ возвращает локальный ряд как есть', () => {
+    const local = [{ id: 1, name: 'x', first_air_date: '2020-01-01' }];
+    assert.strictEqual(Core.mergeAi(local, [], 20, 8), local);
+});
+
 // ---- предпочтения ----
 test('жанры из текста: точное совпадение', () => {
     assert.deepStrictEqual(Core.genreIdsFromText('драма, ужасы'), [18, 27]);

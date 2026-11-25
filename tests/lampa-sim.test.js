@@ -41,6 +41,9 @@ const tmdbData = {
     'discover/tv': [
         { id: 53, name: 'Аниме про реалити', first_air_date: '2019-01-01', genre_ids: [16], original_language: 'ja', overview: 'реалити', vote_average: 7, vote_count: 500 }
     ],
+    'search/tv': [
+        { id: 80, name: 'Новое аниме', original_name: 'Atarashii', first_air_date: '2020-05-01', genre_ids: [16], original_language: 'ja', vote_average: 7, vote_count: 100 }
+    ],
     'discover/movie': [
         { id: 60, title: 'Аниме-фильм', release_date: '2016-01-01', genre_ids: [16, 10749], original_language: 'ja', vote_average: 8.5, vote_count: 2000 },
         { id: 61, title: 'Обычный фильм', release_date: '2016-01-01', genre_ids: [28], original_language: 'en', vote_average: 8.5, vote_count: 2000 },
@@ -58,6 +61,10 @@ global.Lampa = {
     Reguest: function () {
         this.timeout = () => { };
         this.silent = (url, ok, fail, body) => {
+            if (body && url.includes('/aiadvisor/ai')) {
+                posts.push({ url, body: JSON.parse(body) });
+                return ok(global.__aiFail ? { success: false, error: 'not_configured' } : { success: true, taste: 'любит тайны', titles: ['Новое аниме (2020)', 'Выдумка (2019)'] });
+            }
             if (body) { posts.push({ url, body: JSON.parse(body) }); return ok({ success: true }); }
             if (url.includes('/aiadvisor/data')) return ok({ seen: { anime: [], cartoon: [], tv: [], movie: [] }, prefs: {} });
             fail();
@@ -105,7 +112,7 @@ function run(name) {
     assert.ok(rows.every(r => r.screen.includes('main')));
     assert.ok(settings.length > 20, 'настройки зарегистрированы');
     const ver = settings.find(p => p.param.name === 'aiadvisor_version');
-    assert.ok(ver && ver.field.description === '0.13', 'версия показана в настройках');
+    assert.ok(ver && ver.field.description === '0.14', 'версия показана в настройках');
 
     // повторная загрузка плагина не дублирует ряды и настройки
     const settingsBefore = settings.length;
@@ -173,6 +180,33 @@ function run(name) {
     assert.ok(!tl.includes(50), 'просмотренное по таймлайну исключено');
     global.__watchedIds = [];
     store['aiadvisor_anime_cache'] = '';
+
+    // ИИ-подбор: названия от сервера ищутся в TMDB, выдуманные отсеиваются, места ограничены
+    store['aiadvisor_anime_ai'] = true;
+    window.aiadvisorReset();
+    const withAi = await run('aiadvisor_anime');
+    const aiIds = withAi.results.map(r => r.id);
+    assert.ok(aiIds.includes(80), 'найденное в TMDB название от ИИ попало в ряд');
+    assert.ok(withAi.results.find(r => r.id === 80).overview.startsWith('Рекомендует ИИ'), 'подпись ИИ');
+    assert.ok(tmdbCalls.some(c => c.method === 'search/tv' && c.params.query === encodeURIComponent('Новое аниме')), 'поиск по названию');
+    const aiPost = posts.filter(p => p.url.includes('/aiadvisor/ai')).pop();
+    assert.ok(aiPost && aiPost.body.cat === 'anime' && aiPost.body.history.length >= 1, 'на сервер ушла история группы');
+    assert.ok(!('uid' in aiPost.body), 'идентификаторов пользователя в теле нет');
+    // кэш ответа ИИ на 24 часа: второй расчёт не обращается к серверу
+    const aiCalls = posts.filter(p => p.url.includes('/aiadvisor/ai')).length;
+    window.aiadvisorReset();
+    await run('aiadvisor_anime');
+    assert.strictEqual(posts.filter(p => p.url.includes('/aiadvisor/ai')).length, aiCalls, 'ответ ИИ взят из кэша');
+    // сервер ИИ не настроен: ряд строится локально, без ошибок
+    store['aiadvisor_ai_anime'] = '';
+    global.__aiFail = true;
+    window.aiadvisorReset();
+    const noAi = await run('aiadvisor_anime');
+    assert.ok(noAi.results.length > 0 && !noAi.results.some(r => r.id === 80), 'без ИИ ряд локальный');
+    global.__aiFail = false;
+    store['aiadvisor_anime_ai'] = false;
+    store['aiadvisor_ai_anime'] = '';
+    window.aiadvisorReset();
 
     // закладки Lampa (например «Буду смотреть») исключаются из рядов
     global.__fav = { wath: [{ id: 50, name: 'Другое аниме', first_air_date: '2015-01-01' }] };
