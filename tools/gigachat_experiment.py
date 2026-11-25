@@ -84,15 +84,25 @@ def mode_a(token, ctx, data):
 
 
 def mode_b(token, ctx, data):
-    system = "Ты эксперт по кино и сериалам. Отвечай только JSON-массивом строк."
+    system = "Ты эксперт по кино и сериалам. Отвечай обычным текстом по строкам, без JSON и без вступлений."
     user = ("История просмотров пользователя (категория: %s):\n%s\n\n"
-            "Опиши вкус одной строкой и предложи 20 названий, которые могут понравиться, "
-            "включая малоизвестные, но не из истории выше. Формат: JSON-массив из 21 строки: "
-            "первая строка — описание вкуса, дальше 20 строк вида «Название (год)». Названия на русском, "
-            "если есть общеизвестный перевод.") % (data["cat"], history_lines(data))
+            "Сначала одной строкой, начиная со слова ВКУС:, опиши вкус пользователя. "
+            "Затем предложи 20 названий, которые могут понравиться, включая малоизвестные, "
+            "но не из истории выше. Каждое название с новой строки в формате: Название (год). "
+            "Названия на русском, если есть общеизвестный перевод.") % (data["cat"], history_lines(data))
     text, usage = ask(token, ctx, system, user, 1500)
-    arr = first_json_array(text) or []
-    return (arr[0] if arr else ""), [str(x) for x in arr[1:]], usage
+    taste, titles = "", []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.upper().startswith("ВКУС"):
+            taste = line.split(":", 1)[-1].strip()
+            continue
+        line = re.sub(r"^\s*(\d+[.)]|[-*•])\s*", "", line)
+        if re.search(r"\(\d{4}\)", line):
+            titles.append(line)
+    return taste, titles, usage, text
 
 
 def show(title, lines):
@@ -112,7 +122,7 @@ def main():
     del key
 
     a, bad, ua = mode_a(token, ctx, data)
-    taste, b, ub = mode_b(token, ctx, data)
+    taste, b, ub, raw_b = mode_b(token, ctx, data)
 
     print("Группа: %s; история: %d; кандидатов: %d; модель: %s" % (
         data["cat"], len(data["history"]), len(data["candidates"]), MODEL))
@@ -120,6 +130,8 @@ def main():
     show("РЕЖИМ А: ИИ переупорядочил кандидатов (id вне списка: %d)" % bad, a)
     print("\n=== РЕЖИМ Б: вкус по версии ИИ ===\n" + taste)
     show("РЕЖИМ Б: названия от ИИ (в TMDB не проверены)", b)
+    if not b:
+        print("\nРазобрать режим Б не удалось, сырой ответ модели:\n" + raw_b)
     print("\nТокенов: режим А %s, режим Б %s" % (ua.get("total_tokens", "?"), ub.get("total_tokens", "?")))
 
 
