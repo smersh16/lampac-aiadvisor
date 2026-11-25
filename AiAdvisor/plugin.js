@@ -425,12 +425,12 @@
     // ряды и настройки регистрируются по два раза
     if (window.aiadvisor_loaded) return;
     window.aiadvisor_loaded = true;
-    window.aiadvisor_version = '0.14';
+    window.aiadvisor_version = '0.15';
 
     // =====================================================================
     //  Часть Lampa
     // =====================================================================
-    var VERSION = '0.14';
+    var VERSION = '0.15';
     var HOST = '{localhost}';
     var TOKEN = '{token}';
     var CACHE_HOURS = 6;
@@ -608,11 +608,17 @@
     function group(map) {
         var byCat = { anime: [], cartoon: [], tv: [], movie: [] };
         var watched = {};
+        var skipped = {};
         for (var k in map) {
             watched[k] = true;
+            // «Не интересно» (x=1): исключаем и снижаем жанры, но историей просмотра это не считается
+            if (map[k].x === 1) {
+                if (hasGenres(map[k])) skipped[k] = { cat: map[k].cat, g: map[k].g };
+                continue;
+            }
             if (byCat[map[k].cat]) byCat[map[k].cat].push(map[k]);
         }
-        return { byCat: byCat, watched: watched };
+        return { byCat: byCat, watched: watched, skipped: skipped };
     }
 
     // Дозапрос жанров у TMDB для записей без них: до ENRICH_MAX за раз, самые свежие первыми.
@@ -692,6 +698,7 @@
                 var favCount = addFavorites(grouped.watched);
 
                 loadThrown(function (thrown) {
+                    for (var sk in grouped.skipped) thrown[sk] = grouped.skipped[sk];
                     var data = { journal: journal, snapshot: snapshot, merged: grouped, enriched: changed.length, thrown: thrown, favCount: favCount };
                     prepared = { ts: Date.now(), data: data };
 
@@ -946,6 +953,52 @@
                 });
             });
         });
+    }
+
+    // ---- отметки в меню карточки: «Уже смотрел» и «Не интересно» ----
+    // Пункты добавляются в меню долгого нажатия через Lampa.Manifest.plugins (официальная точка расширения).
+    // Запись идёт в журнал на сервере: не зависит от лимита истории Lampa. x=1 — «не интересно».
+    function markCard(card, kind) {
+        var item = Core.toSeen(card, Date.now());
+        if (!item) return;
+        item.p = -1;
+        if (kind === 'skip') item.x = 1;
+
+        var net = new Lampa.Reguest();
+        net.timeout(15000);
+        net.silent(apiUrl('/aiadvisor/seen'), function (json) {
+            var ok = json && json.success !== false;
+            if (ok) {
+                prepared = null;
+                Core.CATS.forEach(function (c) { Lampa.Storage.set(storageKey(c, 'cache'), ''); });
+            }
+            try {
+                var title = card.title || card.name || '';
+                Lampa.Noty.show(ok ? (kind === 'skip' ? 'Не интересно: ' : 'Уже смотрел: ') + title + '. Обновится в рядах при следующем открытии главной'
+                    : 'Рекомендации: не удалось сохранить отметку');
+            } catch (e) { /* без уведомления */ }
+        }, function () {
+            try { Lampa.Noty.show('Рекомендации: не удалось сохранить отметку'); } catch (e) { /* без уведомления */ }
+        }, JSON.stringify([item]), { headers: { 'Content-Type': 'application/json' } });
+    }
+
+    function registerMarks() {
+        try {
+            if (!Lampa.Manifest || typeof Lampa.Manifest !== 'object') return;
+            [
+                ['viewed', 'Рекомендации: уже смотрел', 'Больше не показывать в рекомендациях'],
+                ['skip', 'Рекомендации: не интересно', 'Скрыть и реже показывать похожее']
+            ].forEach(function (m) {
+                Lampa.Manifest.plugins = {
+                    type: 'video',
+                    version: VERSION,
+                    name: m[1],
+                    description: m[2],
+                    onContextMenu: function () { return { name: m[1], description: m[2] }; },
+                    onContextLauch: function (card) { markCard(card, m[0]); }
+                };
+            });
+        } catch (e) { /* меню карточки недоступно в этой версии Lampa */ }
     }
 
     // ---- ряды на главной ----
@@ -1315,6 +1368,7 @@
         ready = true;
         registerSettings();
         registerRows();
+        registerMarks();
         pullPrefs();
     }
 

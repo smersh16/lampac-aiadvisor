@@ -26,7 +26,7 @@ public class AiAdvisorController : BaseController
     static readonly string[] cats = { "anime", "cartoon", "tv", "movie" };
     static readonly string[] prefFields = { "liked", "disliked", "stop", "langs", "min_rating", "year_from" };
 
-    const int MaxPerCat = 500;
+    const int MaxPerCat = 800;
     const int MaxItemsPerRequest = 300;
     const int MaxBody = 262144;
     const int MaxPrefLength = 500;
@@ -413,7 +413,8 @@ public class AiAdvisorController : BaseController
                 ["g"] = genres,
                 ["l"] = lang,
                 ["ts"] = src.Value<long?>("ts") ?? 0,
-                ["p"] = Math.Clamp(src.Value<int?>("p") ?? -1, -1, 100)
+                ["p"] = Math.Clamp(src.Value<int?>("p") ?? -1, -1, 100),
+                ["x"] = src.Value<int?>("x") == 1 ? 1 : 0
             };
         }
         catch

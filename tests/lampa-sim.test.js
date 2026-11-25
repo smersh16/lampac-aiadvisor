@@ -52,7 +52,10 @@ const tmdbData = {
 };
 
 global.window = { appready: true };
+global.__manifest = [];
 global.Lampa = {
+    Manifest: Object.defineProperty({}, 'plugins', { get: () => global.__manifest, set: (p) => { global.__manifest.push(p); } }),
+    Noty: { show: (t) => { global.__noty = t; } },
     Storage: {
         get: (k, d) => (k in store ? store[k] : (d === undefined ? '' : d)),
         set: (k, v) => { store[k] = v; }
@@ -66,7 +69,7 @@ global.Lampa = {
                 return ok(global.__aiFail ? { success: false, error: 'not_configured' } : { success: true, taste: 'любит тайны', titles: ['Новое аниме (2020)', 'Выдумка (2019)'] });
             }
             if (body) { posts.push({ url, body: JSON.parse(body) }); return ok({ success: true }); }
-            if (url.includes('/aiadvisor/data')) return ok({ seen: { anime: [], cartoon: [], tv: [], movie: [] }, prefs: {} });
+            if (url.includes('/aiadvisor/data')) return ok({ seen: global.__seen || { anime: [], cartoon: [], tv: [], movie: [] }, prefs: {} });
             fail();
         };
     },
@@ -112,7 +115,7 @@ function run(name) {
     assert.ok(rows.every(r => r.screen.includes('main')));
     assert.ok(settings.length > 20, 'настройки зарегистрированы');
     const ver = settings.find(p => p.param.name === 'aiadvisor_version');
-    assert.ok(ver && ver.field.description === '0.14', 'версия показана в настройках');
+    assert.ok(ver && ver.field.description === '0.15', 'версия показана в настройках');
 
     // повторная загрузка плагина не дублирует ряды и настройки
     const settingsBefore = settings.length;
@@ -206,6 +209,28 @@ function run(name) {
     global.__aiFail = false;
     store['aiadvisor_anime_ai'] = false;
     store['aiadvisor_ai_anime'] = '';
+    window.aiadvisorReset();
+
+    // отметки в меню карточки: два пункта, запись в журнал, x=1 для «не интересно»
+    assert.strictEqual(global.__manifest.length, 2, 'два пункта меню карточки');
+    assert.ok(global.__manifest.every(m => m.type === 'video' && typeof m.onContextMenu === 'function' && typeof m.onContextLauch === 'function'));
+    const skipEntry = global.__manifest.find(m => /не интересно/.test(m.name));
+    const viewedEntry = global.__manifest.find(m => /уже смотрел/.test(m.name));
+    const cardX = { id: 777, name: 'Тест', first_air_date: '2021-01-01', genre_ids: [18], original_language: 'en' };
+    const postsBefore = posts.length;
+    skipEntry.onContextLauch(cardX);
+    viewedEntry.onContextLauch({ ...cardX, id: 778 });
+    const marks = posts.slice(postsBefore).map(p => p.body[0]);
+    assert.strictEqual(marks[0].x, 1, '«не интересно» помечено x=1');
+    assert.ok(marks[1].x === undefined && marks[1].id === 778, '«уже смотрел» без x');
+    assert.ok(/Уже смотрел/.test(global.__noty), 'уведомление показано');
+
+    // отметка с сервера: «не интересно» исключает карточку, но не считается историей группы
+    global.__seen = { anime: [{ id: 50, media: 'tv', cat: 'anime', t: 'Другое аниме', y: 2015, g: [16, 10759], l: 'ja', ts: Date.now(), x: 1, p: -1 }], cartoon: [], tv: [], movie: [] };
+    window.aiadvisorReset();
+    const skippedRow = (await run('aiadvisor_anime')).results.map(r => r.id);
+    assert.ok(!skippedRow.includes(50), 'карточка «не интересно» исключена');
+    global.__seen = null;
     window.aiadvisorReset();
 
     // закладки Lampa (например «Буду смотреть») исключаются из рядов
