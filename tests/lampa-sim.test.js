@@ -105,7 +105,7 @@ function run(name) {
     assert.ok(rows.every(r => r.screen.includes('main')));
     assert.ok(settings.length > 20, 'настройки зарегистрированы');
     const ver = settings.find(p => p.param.name === 'aiadvisor_version');
-    assert.ok(ver && ver.field.description === '0.12', 'версия показана в настройках');
+    assert.ok(ver && ver.field.description === '0.13', 'версия показана в настройках');
 
     // повторная загрузка плагина не дублирует ряды и настройки
     const settingsBefore = settings.length;
@@ -180,6 +180,15 @@ function run(name) {
     const fav = (await run('aiadvisor_anime')).results.map(r => r.id);
     assert.ok(!fav.includes(50), 'карточка из закладок исключена');
     global.__fav = {};
+    window.aiadvisorReset();
+
+    // выгрузка для эксперимента с внешним ИИ
+    window.aiadvisorExport('anime');
+    await new Promise(r => setTimeout(r, 300));
+    const exp = JSON.parse(window.__aiadvisor_export);
+    assert.strictEqual(exp.cat, 'anime');
+    assert.ok(exp.history.length >= 1 && exp.candidates.length >= 1 && exp.local_top.length >= 1, 'выгрузка заполнена');
+    assert.ok(!exp.candidates[0].o.startsWith('Потому что'), 'подпись «почему» из описания убрана');
     window.aiadvisorReset();
 
     // экран настроек: сводка по истории и текущие значения

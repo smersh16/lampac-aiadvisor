@@ -378,12 +378,12 @@
     // ряды и настройки регистрируются по два раза
     if (window.aiadvisor_loaded) return;
     window.aiadvisor_loaded = true;
-    window.aiadvisor_version = '0.12';
+    window.aiadvisor_version = '0.13';
 
     // =====================================================================
     //  Часть Lampa
     // =====================================================================
-    var VERSION = '0.12';
+    var VERSION = '0.13';
     var HOST = '{localhost}';
     var TOKEN = '{token}';
     var CACHE_HOURS = 6;
@@ -718,7 +718,7 @@
         return requests;
     }
 
-    function recommend(cat, cb, debug) {
+    function recommend(cat, cb, debug, limit) {
         var prefs = Core.normalizePrefs(rawPrefs(cat));
         if (!prefs.enabled) return cb([]);
 
@@ -729,7 +729,7 @@
             var items = merged.byCat[cat] || [];
             var sig = JSON.stringify(rawPrefs(cat)) + '|' + data.favCount + '|' + Object.keys(data.thrown || {}).length + '|' + items.slice(0, SEEDS).map(function (i) { return i.media + i.id; }).join(',');
 
-            var cached = cacheGet(cat, sig);
+            var cached = limit ? null : cacheGet(cat, sig);
             if (cached) return cb(cached);
 
             var profile = Core.buildProfile(items);
@@ -776,7 +776,7 @@
                     watched: merged.watched,
                     currentYear: new Date().getFullYear()
                 };
-                var results = Core.rank(cands, rankCtx, 20);
+                var results = Core.rank(cands, rankCtx, limit || 20);
                 results.forEach(function (c) {
                     if (c.why) c.overview = 'Потому что вы смотрели «' + c.why + '». ' + (c.overview || '');
                 });
@@ -788,7 +788,7 @@
                     }).join(' | '));
                 }
 
-                cacheSet(cat, sig, results);
+                if (!limit) cacheSet(cat, sig, results);
                 cb(results);
             });
         });
@@ -1098,6 +1098,34 @@
     window.aiadvisorReset = function () {
         prepared = null;
         Core.CATS.forEach(function (c) { Lampa.Storage.set('aiadvisor_' + c + '_cache', ''); });
+    };
+
+    // Выгрузка данных группы для эксперимента с внешним ИИ: история (названия, год, процент досмотра,
+    // жанры), локальный топ-20 и 40 лучших кандидатов. JSON кладётся в window.__aiadvisor_export
+    window.aiadvisorExport = function (cat) {
+        cat = cat || 'tv';
+        window.aiadvisorReset();
+        recommend(cat, function (top) {
+            prepare(function (data) {
+                var items = (data.merged.byCat[cat] || []).slice().sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); });
+                var card = function (c) {
+                    return { id: c.id, t: c.title || c.name || '', y: Core.yearOf(c), g: genreNames(Core.genreIds(c)), o: String(c.overview || '').replace(/^Потому что вы смотрели «[^»]*»\. /, '').slice(0, 160) };
+                };
+                var out = {
+                    cat: cat,
+                    history: items.slice(0, 60).map(function (i) {
+                        return { t: i.t, y: i.y, p: i.p === undefined ? -1 : i.p, g: genreNames((i.g || []).filter(function (g) { return g !== 16; })) };
+                    }),
+                    candidates: top.slice(0, 40).map(card),
+                    local_top: top.slice(0, 20).map(function (c) { return (c.title || c.name || '') + ' (' + Core.yearOf(c) + ')'; })
+                };
+                var text = JSON.stringify(out);
+                console.log('[aiadvisor] выгрузка', cat, ': история', out.history.length, ', кандидатов', out.candidates.length, ', байт', text.length);
+                // copy() доступна только из строки консоли, поэтому текст кладём в переменную страницы
+                window.__aiadvisor_export = text;
+                console.log('[aiadvisor] готово: выполните copy(__aiadvisor_export)');
+            });
+        }, false, 40);
     };
 
     window.aiadvisorDebug = function (cat) {
