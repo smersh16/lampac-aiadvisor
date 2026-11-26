@@ -79,7 +79,10 @@ public static class AiClient
         if (conf.Value<bool?>("enabled") == false)
             return Fail("disabled");
 
-        await gate.WaitAsync();
+        // очередь к ИИ (один поток): ждём не дольше 30 секунд, потом отвечаем «занято», клиент повторит позже
+        if (!await gate.WaitAsync(TimeSpan.FromSeconds(30)))
+            return Fail("busy");
+
         try
         {
             // пока ждали очередь, другой запрос мог уже посчитать то же самое

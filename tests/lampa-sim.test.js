@@ -77,8 +77,9 @@ global.Lampa = {
     Api: {
         sources: {
             tmdb: {
-                get: (method, params, ok) => {
+                get: (method, params, ok, fail) => {
                     tmdbCalls.push({ method, params });
+                    if (global.__tmdbFail && global.__tmdbFail[method] > 0) { global.__tmdbFail[method]--; return setTimeout(() => fail && fail({ status: 500 }), 0); }
                     if (tmdbDetails[method]) return setTimeout(() => ok({ ...tmdbDetails[method] }), 0);
                     const results = tmdbData[method] || [];
                     setTimeout(() => ok({ results: results.map(r => ({ ...r })) }), 0);
@@ -116,7 +117,7 @@ function run(name) {
     assert.ok(rows.every(r => r.screen.includes('main')));
     assert.ok(settings.length > 20, 'настройки зарегистрированы');
     const ver = settings.find(p => p.param.name === 'aiadvisor_version');
-    assert.ok(ver && ver.field.description === '0.25', 'версия показана в настройках');
+    assert.ok(ver && ver.field.description === '0.26', 'версия показана в настройках');
 
     // повторная загрузка плагина не дублирует ряды и настройки
     const settingsBefore = settings.length;
@@ -304,6 +305,14 @@ function run(name) {
     const before = tmdbCalls.length;
     await run('aiadvisor_anime');
     assert.strictEqual(tmdbCalls.length, before, 'повторный вызов берётся из кэша');
+
+    // временная ошибка TMDB повторяется, постоянная 404 — нет
+    global.__tmdbFail = { 'tv/1': 1 };
+    store['aiadvisor_new_cache'] = '';
+    const retried = await run('aiadvisor_new');
+    assert.ok(retried.results.some(r => r.id === 1), 'после одной ошибки 500 запрос повторён и сериал найден');
+    assert.strictEqual(tmdbCalls.filter(c => c.method === 'tv/1').length >= 2, true, 'было минимум два обращения');
+    global.__tmdbFail = null;
 
     // ряд «Новое у ваших сериалов»: у Наруто (id 1) пять дней назад вышла 1 серия 3 сезона
     const fresh = await run('aiadvisor_new');

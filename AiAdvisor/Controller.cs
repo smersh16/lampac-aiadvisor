@@ -451,9 +451,20 @@ public class AiAdvisorController : BaseController
             return null;
 
         using var reader = new StreamReader(Request.Body, Encoding.UTF8, false, 4096, leaveOpen: true);
-        string body = await reader.ReadToEndAsync();
 
-        if (string.IsNullOrWhiteSpace(body) || body.Length > MaxBody)
+        // читаем кусками и обрываем, как только превышен лимит (Content-Length может быть не указан)
+        var sb = new StringBuilder();
+        var buffer = new char[4096];
+        int read;
+        while ((read = await reader.ReadAsync(buffer, 0, buffer.Length)) > 0)
+        {
+            sb.Append(buffer, 0, read);
+            if (sb.Length > MaxBody)
+                return null;
+        }
+
+        string body = sb.ToString();
+        if (string.IsNullOrWhiteSpace(body))
             return null;
 
         try { return JToken.Parse(body); }

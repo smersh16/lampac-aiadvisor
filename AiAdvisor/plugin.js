@@ -466,12 +466,12 @@
     // ряды и настройки регистрируются по два раза
     if (window.aiadvisor_loaded) return;
     window.aiadvisor_loaded = true;
-    window.aiadvisor_version = '0.25';
+    window.aiadvisor_version = '0.26';
 
     // =====================================================================
     //  Часть Lampa
     // =====================================================================
-    var VERSION = '0.25';
+    var VERSION = '0.26';
     var HOST = '{localhost}';
     var TOKEN = '{token}';
     var CACHE_HOURS = 6;
@@ -512,11 +512,23 @@
     }
 
     // ---- сеть: TMDB через встроенный источник Lampa (учитывает прокси и ключ) ----
-    function tmdbGet(method, params, ok, fail) {
+    // Запрос к TMDB с повтором: до 3 попыток (паузы 0,8 и 2 с). Ответы «не найдено/нет доступа» не повторяются
+    var RETRY_PAUSE = [800, 2000];
+
+    function tmdbGet(method, params, ok, fail, attempt) {
+        attempt = attempt || 0;
+
+        function failed(e) {
+            var status = e && (e.status || (e.responseJSON && e.responseJSON.status_code));
+            var giveUp = attempt >= RETRY_PAUSE.length || status === 404 || status === 401 || status === 422;
+            if (giveUp) return fail && fail(e);
+            setTimeout(function () { tmdbGet(method, params, ok, fail, attempt + 1); }, RETRY_PAUSE[attempt]);
+        }
+
         try {
-            Lampa.Api.sources.tmdb.get(method, params || {}, ok, fail);
+            Lampa.Api.sources.tmdb.get(method, params || {}, ok, failed);
         } catch (e) {
-            fail && fail(e);
+            failed(e);
         }
     }
 
@@ -541,7 +553,8 @@
     function fetchAll(requests, done) {
         var results = [];
         var left = requests.length;
-        if (!left) return done(results);
+        var failed = 0;
+        if (!left) return done(results, 0);
 
         requests.forEach(function (req) {
             enqueue(function (release) {
@@ -553,10 +566,11 @@
                         results.push(r);
                     });
                     release();
-                    if (--left === 0) done(results);
+                    if (--left === 0) done(results, failed);
                 }, function () {
+                    failed++;
                     release();
-                    if (--left === 0) done(results);
+                    if (--left === 0) done(results, failed);
                 });
             });
         });
@@ -942,7 +956,8 @@
         network: 'сервер или GigaChat недоступен',
         empty: 'ИИ вернул пустой ответ',
         auth: 'ключ GigaChat не принят',
-        no_answer: 'ИИ не дал рекомендаций'
+        no_answer: 'ИИ не дал рекомендаций',
+        busy: 'ИИ занят другим запросом, повторится позже'
     };
 
     function aiStatusText(cat) {
@@ -1087,7 +1102,7 @@
             var merged = data.merged;
             var items = merged.byCat[cat] || [];
             var aiState = aiCached(cat);
-            var sig = JSON.stringify(rawPrefs(cat)) + '|ai' + (aiState && aiState.ts ? aiState.ts : 0) + '|' + data.favCount + '|' + Object.keys(data.thrown || {}).length + '|' + items.slice(0, SEEDS).map(function (i) { return i.media + i.id; }).join(',');
+            var sig = VERSION + '|' + JSON.stringify(rawPrefs(cat)) + '|ai' + (aiState && aiState.ts ? aiState.ts : 0) + '|' + data.favCount + '|' + Object.keys(data.thrown || {}).length + '|' + items.slice(0, SEEDS).map(function (i) { return i.media + i.id; }).join(',');
 
             var cached = limit ? null : cacheGet(cat, sig);
             if (cached) return cb(cached);
@@ -1105,7 +1120,8 @@
                 console.log('[aiadvisor] закладки Lampa (исключены из рядов):', data.favCount, '; «брошено», минус по жанрам:', JSON.stringify(profile.neg));
             }
 
-            fetchAll(buildRequests(cat, prefs, profile), function (raw) {
+            var requestList = buildRequests(cat, prefs, profile);
+            fetchAll(requestList, function (raw, failedCount) {
                 var map = {};
                 raw.forEach(function (r) {
                     var k = Core.seenKey(Core.mediaOf(r), r.id);
@@ -1142,7 +1158,7 @@
                 });
 
                 if (debug) {
-                    console.log('[aiadvisor] запросов к TMDB:', raw.length ? 'получено ' + raw.length + ' карточек' : 'пусто', '; кандидатов категории:', cands.length, '; исключено по таймлайну:', skippedTimeline);
+                    console.log('[aiadvisor] запросов к TMDB:', requestList.length, ', не удалось (после повторов):', failedCount, ';', raw.length ? 'получено ' + raw.length + ' карточек' : 'пусто', '; кандидатов категории:', cands.length, '; исключено по таймлайну:', skippedTimeline);
                     console.log('[aiadvisor] итог:', results.map(function (c) {
                         return (c.title || c.name) + ' [hits ' + Math.round(c.hits * 10) / 10 + ', score ' + Math.round(Core.score(c, rankCtx) * 10) / 10 + ']';
                     }).join(' | '));
@@ -1230,7 +1246,7 @@
             shows = shows.slice(0, NEW_CHECK);
             if (!shows.length) return cb([]);
 
-            var sig = shows.map(function (i) { return i.id; }).join(',');
+            var sig = VERSION + '|' + shows.map(function (i) { return i.id; }).join(',');
             var cached = Lampa.Storage.get(NEW_KEY, '');
             if (cached && typeof cached === 'object' && cached.sig === sig && Date.now() - cached.ts < NEW_TTL) return cb(cached.results);
 
