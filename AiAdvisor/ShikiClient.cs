@@ -17,6 +17,9 @@ public class ShikiResult
     public bool Found;
     public string Kind = string.Empty;
     public double Score;
+    public string[] Themes = Array.Empty<string>();
+    public string[] Demographics = Array.Empty<string>();
+    public string Studio = string.Empty;
 }
 
 /// <summary>
@@ -53,12 +56,21 @@ public static class ShikiClient
             var data = JObject.Parse(File.ReadAllText(cachePath, Encoding.UTF8));
             foreach (var p in data.Properties())
             {
+                // записи прежнего формата (без тем) пропускаем: они обновятся при следующем запросе
                 var v = p.Value as JObject;
-                if (v == null)
+                if (v == null || v["th"] == null)
                     continue;
 
                 cache[p.Name] = (DateTimeOffset.FromUnixTimeSeconds(v.Value<long?>("t") ?? 0).UtcDateTime,
-                    new ShikiResult { Found = v.Value<bool?>("f") ?? false, Kind = v.Value<string>("k") ?? string.Empty, Score = v.Value<double?>("s") ?? 0 });
+                    new ShikiResult
+                    {
+                        Found = v.Value<bool?>("f") ?? false,
+                        Kind = v.Value<string>("k") ?? string.Empty,
+                        Score = v.Value<double?>("s") ?? 0,
+                        Themes = (v["th"] as JArray ?? new JArray()).Select(x => x.ToString()).ToArray(),
+                        Demographics = (v["dm"] as JArray ?? new JArray()).Select(x => x.ToString()).ToArray(),
+                        Studio = v.Value<string>("st") ?? string.Empty
+                    });
             }
         }
         catch
@@ -82,7 +94,10 @@ public static class ShikiClient
                     ["t"] = new DateTimeOffset(pair.Value.at, TimeSpan.Zero).ToUnixTimeSeconds(),
                     ["f"] = pair.Value.result.Found,
                     ["k"] = pair.Value.result.Kind,
-                    ["s"] = pair.Value.result.Score
+                    ["s"] = pair.Value.result.Score,
+                    ["th"] = new JArray(pair.Value.result.Themes),
+                    ["dm"] = new JArray(pair.Value.result.Demographics),
+                    ["st"] = pair.Value.result.Studio
                 };
             }
 
@@ -159,9 +174,9 @@ public static class ShikiClient
 
     static async Task<JArray> Search(string text)
     {
-        string query = "{ animes(search: " + JsonConvert.SerializeObject(text) + ", limit: 5) { name russian english japanese synonyms licenseNameRu kind score airedOn { year } } }";
+        string query = "{ animes(search: " + JsonConvert.SerializeObject(text) + ", limit: 5) { name russian english japanese synonyms licenseNameRu kind score airedOn { year } genres { name russian kind } studios { name } } }";
         using var req = new HttpRequestMessage(HttpMethod.Post, Url);
-        req.Headers.TryAddWithoutValidation("User-Agent", "lampac-aiadvisor/0.23");
+        req.Headers.TryAddWithoutValidation("User-Agent", "lampac-aiadvisor/0.27");
         req.Content = new StringContent(new JObject { ["query"] = query }.ToString(Formatting.None), Encoding.UTF8, "application/json");
 
         using var resp = await http.SendAsync(req);
@@ -189,7 +204,24 @@ public static class ShikiClient
             if (year > 0 && y > 0 && Math.Abs(y - year) > 1)
                 continue;
 
-            return new ShikiResult { Found = true, Kind = a.Value<string>("kind") ?? string.Empty, Score = a.Value<double?>("score") ?? 0 };
+            var genres = (a["genres"] as JArray ?? new JArray()).OfType<JObject>().ToList();
+
+            string[] Names(string kind) => genres
+                .Where(g => g.Value<string>("kind") == kind)
+                .Select(g => g.Value<string>("russian") ?? g.Value<string>("name"))
+                .Where(n => !string.IsNullOrEmpty(n))
+                .Take(6)
+                .ToArray();
+
+            return new ShikiResult
+            {
+                Found = true,
+                Kind = a.Value<string>("kind") ?? string.Empty,
+                Score = a.Value<double?>("score") ?? 0,
+                Themes = Names("theme"),
+                Demographics = Names("demographic"),
+                Studio = (a["studios"] as JArray)?.FirstOrDefault()?.Value<string>("name") ?? string.Empty
+            };
         }
 
         return new ShikiResult();

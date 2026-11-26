@@ -65,6 +65,11 @@ global.Lampa = {
     Reguest: function () {
         this.timeout = () => { };
         this.silent = (url, ok, fail, body) => {
+            if (body && url.includes('/aiadvisor/shiki')) {
+                const asked = JSON.parse(body);
+                posts.push({ url, body: asked });
+                return ok({ success: true, items: asked.map(a => ({ k: a.k, found: true, kind: 'tv', score: 8.25, th: ['Исэкай', 'Психологическое'], dm: [], st: 'White Fox' })) });
+            }
             if (body && url.includes('/aiadvisor/ai')) {
                 posts.push({ url, body: JSON.parse(body) });
                 return ok(global.__aiFail ? { success: false, error: 'not_configured' } : { success: true, taste: 'любит тайны', titles: ['Новое аниме (2020)', 'Выдумка (2019)'] });
@@ -117,7 +122,7 @@ function run(name) {
     assert.ok(rows.every(r => r.screen.includes('main')));
     assert.ok(settings.length > 20, 'настройки зарегистрированы');
     const ver = settings.find(p => p.param.name === 'aiadvisor_version');
-    assert.ok(ver && ver.field.description === '0.26', 'версия показана в настройках');
+    assert.ok(ver && ver.field.description === '0.27', 'версия показана в настройках');
 
     // повторная загрузка плагина не дублирует ряды и настройки
     const settingsBefore = settings.length;
@@ -201,6 +206,7 @@ function run(name) {
     assert.ok(withAi.results.find(r => r.id === 80).overview.startsWith('Рекомендует ИИ'), 'подпись ИИ');
     assert.ok(tmdbCalls.some(c => c.method === 'search/tv' && c.params.query === encodeURIComponent('Новое аниме')), 'поиск по названию');
     const aiPost = posts.filter(p => p.url.includes('/aiadvisor/ai')).pop();
+    assert.ok(aiPost.body.history.some(h => h.th === 'Исэкай, Психологическое' && h.ss === 8.25 && h.s === 'White Fox'), 'ИИ получил темы, оценку и студию Shikimori для аниме');
     assert.ok(aiPost && aiPost.body.cat === 'anime' && aiPost.body.history.length >= 1, 'на сервер ушла история группы');
     assert.ok(!('uid' in aiPost.body), 'идентификаторов пользователя в теле нет');
     // «Брошено» (Lampa) и «Не интересно» (журнал) уходят ИИ отдельным списком своей группы
@@ -214,7 +220,7 @@ function run(name) {
     const skipTitles = (skipPost.body.skip || []).map(e => e.t).sort();
     assert.deepStrictEqual(skipTitles, ['Брошенное аниме', 'Скучное аниме'], 'ИИ получил «брошено» и «не интересно» своей группы');
     const rich = skipPost.body.skip.find(e => e.t === 'Скучное аниме');
-    assert.deepStrictEqual([rich.r, rich.d, rich.a, rich.k, rich.c, rich.s, rich.o], [5.5, 'Автор Скучный', 'Актёр А, Актёр Б', 'школа', 'JP', 'Сеть Х', 'Скучный сюжет про ничего'], 'ИИ получил рейтинг, автора, актёров, сюжет и т.д.');
+    assert.deepStrictEqual([rich.r, rich.d, rich.a, rich.k, rich.c, rich.s, rich.o], [5.5, 'Автор Скучный', 'Актёр А, Актёр Б', 'школа', 'JP', 'White Fox', 'Скучный сюжет про ничего'], 'ИИ получил рейтинг, автора, актёров, сюжет и т.д. (студия аниме — по Shikimori)');
     assert.ok(Object.keys(store['aiadvisor_meta'] || {}).length >= 1, 'метаданные закэшированы на устройстве');
     global.__fav = {};
     global.__seen = null;

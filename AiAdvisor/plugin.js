@@ -466,12 +466,12 @@
     // ряды и настройки регистрируются по два раза
     if (window.aiadvisor_loaded) return;
     window.aiadvisor_loaded = true;
-    window.aiadvisor_version = '0.26';
+    window.aiadvisor_version = '0.27';
 
     // =====================================================================
     //  Часть Lampa
     // =====================================================================
-    var VERSION = '0.26';
+    var VERSION = '0.27';
     var HOST = '{localhost}';
     var TOKEN = '{token}';
     var CACHE_HOURS = 6;
@@ -881,6 +881,50 @@
         });
     }
 
+    // Справочник Shikimori для аниме (темы, демография, студия, оценка): запрашивается через сервер, кэшируется на устройстве
+    var SHIKI_KEY = 'aiadvisor_shiki';
+    var SHIKI_MAX = 300;
+
+    function shikiStore() {
+        var m = Lampa.Storage.get(SHIKI_KEY, '');
+        return m && typeof m === 'object' ? m : {};
+    }
+
+    // list: [{ k, t, o, y }]; один запрос к серверу (до 40), недостающее дозаполняется при следующих обновлениях
+    function ensureShiki(list, cb) {
+        var store = shikiStore();
+        var todo = list.filter(function (e) { return !store[e.k]; }).slice(0, 40);
+        if (!todo.length) return cb(store);
+
+        var net = new Lampa.Reguest();
+        net.timeout(60000);
+        net.silent(apiUrl('/aiadvisor/shiki'), function (json) {
+            ((json && json.items) || []).forEach(function (e) {
+                if (!e || e.pending) return;
+                store[e.k] = { f: e.found ? 1 : 0, th: e.th || [], dm: e.dm || [], st: e.st || '', sc: e.score || 0, ts: Date.now() };
+            });
+            var keys = Object.keys(store);
+            if (keys.length > SHIKI_MAX) {
+                keys.sort(function (a, b) { return (store[a].ts || 0) - (store[b].ts || 0); });
+                keys.slice(0, keys.length - SHIKI_MAX).forEach(function (k) { delete store[k]; });
+            }
+            try { Lampa.Storage.set(SHIKI_KEY, store); } catch (e) { /* без кэша */ }
+            cb(store);
+        }, function () {
+            cb(store);
+        }, JSON.stringify(todo), { headers: { 'Content-Type': 'application/json' } });
+    }
+
+    function shikiFields(sh) {
+        var out = {};
+        if (!sh || !sh.f) return out;
+        if (sh.th && sh.th.length) out.th = sh.th.join(', ');
+        if (sh.dm && sh.dm.length) out.dm = sh.dm.join(', ');
+        if (sh.st) out.s = sh.st;
+        if (sh.sc) out.ss = sh.sc;
+        return out;
+    }
+
     function metaFields(m) {
         if (!m) return {};
         var out = {};
@@ -924,23 +968,35 @@
             .concat(skips.map(function (e) { var kv = e.k.split(':'); return { key: e.k, media: kv[0], id: kv[1] }; }));
 
         ensureMeta(refs, function (meta) {
-            var body = JSON.stringify({
-                cat: cat,
-                history: recent.map(function (i) {
-                    var row = { t: i.t, y: i.y, p: i.p === undefined ? -1 : i.p, g: genreNames((i.g || []).filter(function (g) { return g !== 16; })) };
-                    var m = metaFields(meta[i.media + ':' + i.id]);
-                    for (var f in m) row[f] = m[f];
-                    return row;
-                }),
-                skip: skips.map(function (e) {
-                    var row = { t: e.t, y: e.y, g: e.g };
-                    var m = metaFields(meta[e.k]);
-                    for (var f in m) row[f] = m[f];
-                    return row;
-                })
-            });
+            // для аниме добавляем данные Shikimori; для остальных категорий шаг пропускается
+            var shikiList = cat !== 'anime' ? [] : recent.map(function (i) { return { k: i.media + ':' + i.id, t: i.t, y: i.y }; })
+                .concat(skips.map(function (e) { return { k: e.k, t: e.t, y: e.y }; }))
+                .map(function (e) { e.o = (meta[e.k] || {}).on || ''; return e; });
 
-            postAi(cat, sig, cached, body, cb);
+            ensureShiki(shikiList, function (shiki) {
+                var body = JSON.stringify({
+                    cat: cat,
+                    history: recent.map(function (i) {
+                        var k = i.media + ':' + i.id;
+                        var row = { t: i.t, y: i.y, p: i.p === undefined ? -1 : i.p, g: genreNames((i.g || []).filter(function (g) { return g !== 16; })) };
+                        var m = metaFields(meta[k]);
+                        for (var f in m) row[f] = m[f];
+                        var sh = shikiFields(cat === 'anime' ? shiki[k] : null);
+                        for (var f2 in sh) row[f2] = sh[f2];
+                        return row;
+                    }),
+                    skip: skips.map(function (e) {
+                        var row = { t: e.t, y: e.y, g: e.g };
+                        var m = metaFields(meta[e.k]);
+                        for (var f in m) row[f] = m[f];
+                        var sh = shikiFields(cat === 'anime' ? shiki[e.k] : null);
+                        for (var f2 in sh) row[f2] = sh[f2];
+                        return row;
+                    })
+                });
+
+                postAi(cat, sig, cached, body, cb);
+            });
         });
     }
 

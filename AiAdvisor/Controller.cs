@@ -278,7 +278,11 @@ public class AiAdvisorController : BaseController
 
             items.Add(r == null
                 ? new JObject { ["k"] = key, ["pending"] = true }
-                : new JObject { ["k"] = key, ["found"] = r.Found, ["kind"] = r.Kind, ["score"] = r.Score });
+                : new JObject
+                {
+                    ["k"] = key, ["found"] = r.Found, ["kind"] = r.Kind, ["score"] = r.Score,
+                    ["th"] = new JArray(r.Themes), ["dm"] = new JArray(r.Demographics), ["st"] = r.Studio
+                });
         }
 
         return ContentTo(new JObject { ["success"] = true, ["items"] = items }.ToString(Formatting.None), "application/json; charset=utf-8");
@@ -379,6 +383,13 @@ public class AiAdvisorController : BaseController
         string genres = Oneline(h.Value<string>("g"), 80);
         if (genres.Length > 0)
             sb.Append(" [").Append(genres).Append(']');
+
+        double shikiScore = h.Value<double?>("ss") ?? 0;
+        if (shikiScore > 0 && shikiScore <= 10)
+            sb.Append(", оценка Shikimori ").Append(shikiScore.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture));
+
+        Part("демография", "dm", 60);
+        Part("темы", "th", 120);
 
         string kw = Oneline(h.Value<string>("k"), 100);
         if (kw.Length > 0)
