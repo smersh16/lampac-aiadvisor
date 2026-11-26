@@ -462,7 +462,7 @@ public class AiAdvisorController : BaseController
                 ["l"] = lang,
                 ["ts"] = src.Value<long?>("ts") ?? 0,
                 ["p"] = Math.Clamp(src.Value<int?>("p") ?? -1, -1, 100),
-                ["x"] = src.Value<int?>("x") == 1 ? 1 : 0
+                ["x"] = src.Value<int?>("x") is 1 or 2 ? src.Value<int?>("x") : 0
             };
         }
         catch

@@ -116,7 +116,7 @@ function run(name) {
     assert.ok(rows.every(r => r.screen.includes('main')));
     assert.ok(settings.length > 20, 'настройки зарегистрированы');
     const ver = settings.find(p => p.param.name === 'aiadvisor_version');
-    assert.ok(ver && ver.field.description === '0.19', 'версия показана в настройках');
+    assert.ok(ver && ver.field.description === '0.20', 'версия показана в настройках');
 
     // повторная загрузка плагина не дублирует ряды и настройки
     const settingsBefore = settings.length;
@@ -249,7 +249,7 @@ function run(name) {
     viewedEntry.onContextLauch({ ...cardX, id: 778 });
     const marks = posts.slice(postsBefore).map(p => p.body[0]);
     assert.strictEqual(marks[0].x, 1, '«не интересно» помечено x=1');
-    assert.ok(marks[1].x === undefined && marks[1].id === 778, '«уже смотрел» без x');
+    assert.ok(marks[1].x === 2 && marks[1].p === 100 && marks[1].id === 778, '«уже смотрел»: x=2, досмотрено 100%');
     assert.ok(/Уже смотрел/.test(global.__noty), 'уведомление показано');
 
     // отметка с сервера: «не интересно» исключает карточку, но не считается историей группы

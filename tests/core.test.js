@@ -289,4 +289,14 @@ test('профили категорий не смешиваются: аниме 
     assert.ok(animeProfile.genres[16] === 1);
 });
 
+test('ручные отметки «уже смотрел» дополняют историю и не перевешивают её', () => {
+    const real = [{ g: [18], l: 'en', ts: 1, p: 100 }];
+    const marks = [1, 2, 3].map(i => ({ g: [35], l: 'en', ts: 1000 + i, p: 100, x: 2 }));
+    const prof = Core.buildProfile(real.concat(marks));
+    assert.ok(prof.genres[18] > 0 && prof.genres[35] > 0, 'оба жанра учтены');
+    const noMarks = Core.buildProfile(real.concat([{ g: [35], l: 'en', ts: 1000, p: 100 }, { g: [35], l: 'en', ts: 1001, p: 100 }, { g: [35], l: 'en', ts: 1002, p: 100 }]));
+    assert.ok(prof.genres[35] / prof.genres[18] < noMarks.genres[35] / noMarks.genres[18], 'отметки весят меньше реальных просмотров');
+    assert.strictEqual(prof.seeds[0].x, undefined, 'реальная история идёт в основу подбора первой');
+});
+
 console.log('\n' + passed + ' тестов прошло');

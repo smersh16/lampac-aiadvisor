@@ -161,16 +161,25 @@
             return 0.05;
         }
 
+        var MARK_FACTOR = 0.4;
+
         function buildProfile(items) {
-            var sorted = items.slice().sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); });
+            var byTime = function (a, b) { return (b.ts || 0) - (a.ts || 0); };
+            // ручные отметки «уже смотрел» (x=2) дополняют реальную историю: свой порядок, вес ниже, в основу подбора идут после неё
+            var real = items.filter(function (i) { return i.x !== 2; }).sort(byTime);
+            var marks = items.filter(function (i) { return i.x === 2; }).sort(byTime);
             var genres = {};
             var langs = {};
-            sorted.forEach(function (it, rank) {
-                var w = (1 / (1 + 0.05 * rank)) * completionWeight(it.p);
-                (it.g || []).forEach(function (g) { genres[g] = (genres[g] || 0) + w; });
-                if (it.l) langs[it.l] = (langs[it.l] || 0) + w;
-            });
-            return { genres: normalize(genres), langs: normalize(langs), seeds: sorted };
+            function add(list, factor) {
+                list.forEach(function (it, rank) {
+                    var w = factor * (1 / (1 + 0.05 * rank)) * completionWeight(it.p);
+                    (it.g || []).forEach(function (g) { genres[g] = (genres[g] || 0) + w; });
+                    if (it.l) langs[it.l] = (langs[it.l] || 0) + w;
+                });
+            }
+            add(real, 1);
+            add(marks, MARK_FACTOR);
+            return { genres: normalize(genres), langs: normalize(langs), seeds: real.concat(marks) };
         }
 
         function normalize(map) {
@@ -455,12 +464,12 @@
     // ряды и настройки регистрируются по два раза
     if (window.aiadvisor_loaded) return;
     window.aiadvisor_loaded = true;
-    window.aiadvisor_version = '0.19';
+    window.aiadvisor_version = '0.20';
 
     // =====================================================================
     //  Часть Lampa
     // =====================================================================
-    var VERSION = '0.19';
+    var VERSION = '0.20';
     var HOST = '{localhost}';
     var TOKEN = '{token}';
     var CACHE_HOURS = 6;
@@ -864,7 +873,11 @@
     }
 
     function aiRecent(items) {
-        return items.slice().sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); }).slice(0, 60);
+        // реальная история в приоритете, ручные отметки «уже смотрел» дополняют её (не больше 20 и не вытесняют недавнее)
+        var byTime = function (a, b) { return (b.ts || 0) - (a.ts || 0); };
+        var real = items.filter(function (i) { return i.x !== 2; }).sort(byTime).slice(0, 45);
+        var marks = items.filter(function (i) { return i.x === 2; }).sort(byTime).slice(0, Math.min(20, 60 - real.length));
+        return real.concat(marks);
     }
 
     // «Брошено» и «Не интересно» группы: уходят ИИ отдельным списком (только записи с названием)
@@ -1115,8 +1128,8 @@
     function markCard(card, kind) {
         var item = Core.toSeen(card, Date.now());
         if (!item) return;
-        item.p = -1;
-        if (kind === 'skip') item.x = 1;
+        item.p = kind === 'skip' ? -1 : 100;
+        item.x = kind === 'skip' ? 1 : 2;  // 2 = «уже смотрел» вручную: дополняет историю, весит меньше
 
         var net = new Lampa.Reguest();
         net.timeout(15000);
