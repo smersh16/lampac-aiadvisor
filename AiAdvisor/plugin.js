@@ -425,12 +425,12 @@
     // ряды и настройки регистрируются по два раза
     if (window.aiadvisor_loaded) return;
     window.aiadvisor_loaded = true;
-    window.aiadvisor_version = '0.15';
+    window.aiadvisor_version = '0.16';
 
     // =====================================================================
     //  Часть Lampa
     // =====================================================================
-    var VERSION = '0.15';
+    var VERSION = '0.16';
     var HOST = '{localhost}';
     var TOKEN = '{token}';
     var CACHE_HOURS = 6;
@@ -784,11 +784,19 @@
         return c && typeof c === 'object' ? c : null;
     }
 
+    function aiRecent(items) {
+        return items.slice().sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); }).slice(0, 60);
+    }
+
+    function aiSig(recent) {
+        return recent.map(function (i) { return i.media + i.id + ':' + (i.p === undefined ? -1 : i.p); }).join(',');
+    }
+
     function fetchAi(cat, items, cb) {
-        var recent = items.slice().sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); }).slice(0, 60);
+        var recent = aiRecent(items);
         if (!recent.length) return cb(null);
 
-        var sig = recent.map(function (i) { return i.media + i.id + ':' + (i.p === undefined ? -1 : i.p); }).join(',');
+        var sig = aiSig(recent);
         var cached = aiCached(cat);
         if (cached && cached.sig === sig && Date.now() - cached.ts < AI_TTL && cached.titles) return cb(cached);
 
@@ -852,9 +860,43 @@
         });
     }
 
+    // Ответ ИИ обновляется в фоне и не задерживает открытие главной: ряд строится сразу из локального
+    // подбора и последнего известного ответа ИИ (даже устаревшего). Свежий ответ применится при следующем открытии.
+    var aiPending = {};
+
+    function refreshAiInBackground(cat, items) {
+        if (aiPending[cat]) return;
+        aiPending[cat] = true;
+        fetchAi(cat, items, function (ai) {
+            aiPending[cat] = false;
+            // новый ответ: сбрасываем кэш ряда, чтобы следующее открытие главной его учло
+            if (ai && ai.titles) Lampa.Storage.set(storageKey(cat, 'cache'), '');
+        });
+    }
+
     function withAi(cat, prefs, items, rankCtx, results, debug, done) {
         if (!prefs.ai) return done(results);
 
+        // aiadvisorDebug ждёт ответ ИИ, чтобы показать его в консоли
+        if (debug) return withAiBlocking(cat, prefs, items, rankCtx, results, debug, done);
+
+        var recent = aiRecent(items);
+        var cached = aiCached(cat);
+        var fresh = cached && cached.titles && cached.sig === aiSig(recent) && Date.now() - cached.ts < AI_TTL;
+        if (!fresh && recent.length) refreshAiInBackground(cat, items);
+
+        if (!cached || !cached.titles) return done(results);
+
+        resolveAi(cat, cached.titles, function (cards) {
+            var valid = cards.filter(function (c) {
+                return Core.categoryOf(c) === cat && Core.score(c, rankCtx) !== null && !timelineWatched(c);
+            });
+            valid.forEach(function (c) { c.overview = 'Рекомендует ИИ. ' + (c.overview || ''); });
+            done(Core.mergeAi(results, valid, 20, AI_SLOTS));
+        });
+    }
+
+    function withAiBlocking(cat, prefs, items, rankCtx, results, debug, done) {
         fetchAi(cat, items, function (ai) {
             if (!ai || !ai.titles) {
                 if (debug) console.log('[aiadvisor] ИИ недоступен:', ai && ai.error);
@@ -884,7 +926,8 @@
             var snapshot = data.snapshot;
             var merged = data.merged;
             var items = merged.byCat[cat] || [];
-            var sig = JSON.stringify(rawPrefs(cat)) + '|' + data.favCount + '|' + Object.keys(data.thrown || {}).length + '|' + items.slice(0, SEEDS).map(function (i) { return i.media + i.id; }).join(',');
+            var aiState = aiCached(cat);
+            var sig = JSON.stringify(rawPrefs(cat)) + '|ai' + (aiState && aiState.ts ? aiState.ts : 0) + '|' + data.favCount + '|' + Object.keys(data.thrown || {}).length + '|' + items.slice(0, SEEDS).map(function (i) { return i.media + i.id; }).join(',');
 
             var cached = limit ? null : cacheGet(cat, sig);
             if (cached) return cb(cached);

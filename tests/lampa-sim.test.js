@@ -115,7 +115,7 @@ function run(name) {
     assert.ok(rows.every(r => r.screen.includes('main')));
     assert.ok(settings.length > 20, 'настройки зарегистрированы');
     const ver = settings.find(p => p.param.name === 'aiadvisor_version');
-    assert.ok(ver && ver.field.description === '0.15', 'версия показана в настройках');
+    assert.ok(ver && ver.field.description === '0.16', 'версия показана в настройках');
 
     // повторная загрузка плагина не дублирует ряды и настройки
     const settingsBefore = settings.length;
@@ -187,9 +187,15 @@ function run(name) {
     // ИИ-подбор: названия от сервера ищутся в TMDB, выдуманные отсеиваются, места ограничены
     store['aiadvisor_anime_ai'] = true;
     window.aiadvisorReset();
+    const t0 = Date.now();
+    const firstRow = await run('aiadvisor_anime');
+    assert.ok(!firstRow.results.some(r => r.id === 80), 'первый ряд строится сразу, без ожидания ИИ (ответа ещё нет)');
+    await new Promise(r => setTimeout(r, 100));
+    assert.ok(posts.some(p => p.url.includes('/aiadvisor/ai')), 'запрос к ИИ ушёл в фоне');
+    // без ручного сброса: новый ответ ИИ сам делает кэш ряда недействительным
     const withAi = await run('aiadvisor_anime');
     const aiIds = withAi.results.map(r => r.id);
-    assert.ok(aiIds.includes(80), 'найденное в TMDB название от ИИ попало в ряд');
+    assert.ok(aiIds.includes(80), 'при следующем открытии название от ИИ, найденное в TMDB, попало в ряд');
     assert.ok(withAi.results.find(r => r.id === 80).overview.startsWith('Рекомендует ИИ'), 'подпись ИИ');
     assert.ok(tmdbCalls.some(c => c.method === 'search/tv' && c.params.query === encodeURIComponent('Новое аниме')), 'поиск по названию');
     const aiPost = posts.filter(p => p.url.includes('/aiadvisor/ai')).pop();
