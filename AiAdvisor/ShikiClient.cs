@@ -35,13 +35,14 @@ public static class ShikiClient
     static DateTime lastRequest = DateTime.MinValue;
 
     // null — запрос не состоялся (ошибка сети, 429): в кэш не кладём
-    public static async Task<ShikiResult> Lookup(string title, int year)
+    public static async Task<ShikiResult> Lookup(string title, string original, int year)
     {
         string norm = Norm(title);
         if (norm.Length == 0)
             return new ShikiResult();
 
-        string key = norm + "|" + year;
+        string normOriginal = Norm(original);
+        string key = norm + "|" + normOriginal + "|" + year;
         if (cache.TryGetValue(key, out var hit) && DateTime.UtcNow - hit.at < Ttl)
             return hit.result;
 
@@ -55,19 +56,29 @@ public static class ShikiClient
             if (wait > TimeSpan.Zero)
                 await Task.Delay(wait);
 
-            lastRequest = DateTime.UtcNow;
+            // сначала ищем по названию из Lampa, затем (если не нашли) по оригинальному
+            var names = new[] { norm, normOriginal }.Where(n => n.Length > 0).ToArray();
+            var result = new ShikiResult();
 
-            string query = "{ animes(search: " + JsonConvert.SerializeObject(title) + ", limit: 5) { name russian kind score airedOn { year } } }";
-            using var req = new HttpRequestMessage(HttpMethod.Post, Url);
-            req.Headers.TryAddWithoutValidation("User-Agent", "lampac-aiadvisor/0.22");
-            req.Content = new StringContent(new JObject { ["query"] = query }.ToString(Formatting.None), Encoding.UTF8, "application/json");
+            for (int i = 0; i < names.Length && !result.Found; i++)
+            {
+                if (i > 0)
+                {
+                    var pause = TimeSpan.FromMilliseconds(SpacingMs) - (DateTime.UtcNow - lastRequest);
+                    if (pause > TimeSpan.Zero)
+                        await Task.Delay(pause);
+                }
 
-            using var resp = await http.SendAsync(req);
-            if (!resp.IsSuccessStatusCode)
-                return null;
+                lastRequest = DateTime.UtcNow;
 
-            var json = JObject.Parse(await resp.Content.ReadAsStringAsync());
-            var result = Match(json["data"]?["animes"] as JArray, norm, year);
+                string text = i == 0 ? title : original;
+                var list = await Search(text);
+                if (list == null)
+                    return null;
+
+                result = Match(list, names, year);
+            }
+
             cache[key] = (DateTime.UtcNow, result);
             return result;
         }
@@ -81,12 +92,32 @@ public static class ShikiClient
         }
     }
 
-    // совпадение названия (оригинальное или русское) и года (±1)
-    public static ShikiResult Match(JArray list, string norm, int year)
+    static async Task<JArray> Search(string text)
+    {
+        string query = "{ animes(search: " + JsonConvert.SerializeObject(text) + ", limit: 5) { name russian english japanese synonyms licenseNameRu kind score airedOn { year } } }";
+        using var req = new HttpRequestMessage(HttpMethod.Post, Url);
+        req.Headers.TryAddWithoutValidation("User-Agent", "lampac-aiadvisor/0.23");
+        req.Content = new StringContent(new JObject { ["query"] = query }.ToString(Formatting.None), Encoding.UTF8, "application/json");
+
+        using var resp = await http.SendAsync(req);
+        if (!resp.IsSuccessStatusCode)
+            return null;
+
+        var json = JObject.Parse(await resp.Content.ReadAsStringAsync());
+        return json["data"]?["animes"] as JArray ?? new JArray();
+    }
+
+    // совпадение названия с любым из имён записи (оригинальное, русское, английское, японское, синонимы, лицензионное) и года (±1)
+    public static ShikiResult Match(JArray list, string[] norms, int year)
     {
         foreach (var a in list ?? new JArray())
         {
-            if (Norm(a.Value<string>("name")) != norm && Norm(a.Value<string>("russian")) != norm)
+            var all = new[] { a.Value<string>("name"), a.Value<string>("russian"), a.Value<string>("english"), a.Value<string>("japanese"), a.Value<string>("licenseNameRu") }
+                .Concat((a["synonyms"] as JArray ?? new JArray()).Select(x => x.ToString()))
+                .Select(Norm)
+                .Where(n => n.Length > 0);
+
+            if (!all.Any(n => norms.Contains(n)))
                 continue;
 
             int y = a["airedOn"]?.Value<int?>("year") ?? 0;

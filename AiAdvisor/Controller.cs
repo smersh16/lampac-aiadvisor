@@ -245,7 +245,7 @@ public class AiAdvisorController : BaseController
 
     #region /aiadvisor/shiki
     /// <summary>
-    /// Тело: [{ k: "tv:123", t, y }] (до 40). Ответ: { success, items: [{ k, found, kind, score, pending }] }.
+    /// Тело: [{ k: "tv:123", t, o (оригинальное название), y }] (до 40). Ответ: { success, items: [{ k, found, kind, score, pending }] }.
     /// pending: не успели или Shikimori недоступен; повторите позже, готовое лежит в кэше.
     /// </summary>
     [HttpPost]
@@ -273,7 +273,7 @@ public class AiAdvisorController : BaseController
                 continue;
 
             ShikiResult r = DateTime.UtcNow - started < TimeSpan.FromSeconds(25)
-                ? await ShikiClient.Lookup(title, h.Value<int?>("y") ?? 0)
+                ? await ShikiClient.Lookup(title, Oneline(h.Value<string>("o"), 120), h.Value<int?>("y") ?? 0)
                 : null;
 
             items.Add(r == null

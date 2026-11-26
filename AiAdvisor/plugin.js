@@ -312,6 +312,7 @@
                 o: String(details.overview || '').replace(/\s+/g, ' ').trim().slice(0, 180),
                 c: countries.slice(0, 3).join(', '),
                 s: studio || '',
+                on: String(details.original_name || details.original_title || ''),
                 an: (kw || []).some(function (x) { return x && String(x.name).toLowerCase() === 'anime'; }) ? 1 : 0
             };
         }
@@ -465,12 +466,12 @@
     // ряды и настройки регистрируются по два раза
     if (window.aiadvisor_loaded) return;
     window.aiadvisor_loaded = true;
-    window.aiadvisor_version = '0.22';
+    window.aiadvisor_version = '0.23';
 
     // =====================================================================
     //  Часть Lampa
     // =====================================================================
-    var VERSION = '0.22';
+    var VERSION = '0.23';
     var HOST = '{localhost}';
     var TOKEN = '{token}';
     var CACHE_HOURS = 6;
@@ -837,7 +838,7 @@
     // refs: [{ key: 'tv:123', media, id }]; недостающие подгружаются пачкой (в фоне, ответ ИИ ждёт их)
     function ensureMeta(refs, cb) {
         var store = metaStore();
-        var todo = refs.filter(function (r) { return !store[r.key] || store[r.key].an === undefined; }).slice(0, META_BATCH);
+        var todo = refs.filter(function (r) { return !store[r.key] || store[r.key].an === undefined || store[r.key].on === undefined; }).slice(0, META_BATCH);
         if (!todo.length) return cb(store);
 
         var left = todo.length;
@@ -1666,7 +1667,7 @@
             ensureMeta(refs, function (meta) {
                 var net = new Lampa.Reguest();
                 net.timeout(60000);
-                var ask = refs.slice(0, 40).map(function (r) { return { k: r.key, t: info[r.key].t, y: info[r.key].y }; });
+                var ask = refs.slice(0, 40).map(function (r) { return { k: r.key, t: info[r.key].t, o: (meta[r.key] || {}).on || '', y: info[r.key].y }; });
 
                 net.silent(apiUrl('/aiadvisor/shiki'), function (json) {
                     var shiki = {};
