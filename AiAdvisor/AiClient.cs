@@ -23,6 +23,7 @@ public class AiOutcome
     public string Error;
     public string Taste = string.Empty;
     public string[] Titles = Array.Empty<string>();
+    public string Source = "new"; // new | cache | interval
 }
 
 /// <summary>
@@ -63,14 +64,14 @@ public static class AiClient
         string hash = Convert.ToHexString(SHA1.HashData(Encoding.UTF8.GetBytes(cat + "\n" + string.Join("\n", historyLines))));
 
         if (cache.TryGetValue(key, out var hit) && hit.hash == hash && DateTime.UtcNow - hit.at < CacheTtl)
-            return hit.result;
+            return Copy(hit.result, "cache");
 
         if (failures.TryGetValue(key, out var failed) && DateTime.UtcNow - failed.at < ErrorBackoff)
             return Fail(failed.code);
 
         // история изменилась, но недавно уже считали: отдаём прежний ответ, новый посчитается позже
         if (cache.TryGetValue(key, out var previous) && lastCall.TryGetValue(key, out var called) && DateTime.UtcNow - called < MinInterval)
-            return previous.result;
+            return Copy(previous.result, "interval");
 
         var conf = LoadConf();
         if (conf == null)
@@ -87,7 +88,7 @@ public static class AiClient
         {
             // пока ждали очередь, другой запрос мог уже посчитать то же самое
             if (cache.TryGetValue(key, out hit) && hit.hash == hash && DateTime.UtcNow - hit.at < CacheTtl)
-                return hit.result;
+                return Copy(hit.result, "cache");
 
             var client = GetClient();
             if (client == null)
@@ -140,6 +141,8 @@ public static class AiClient
             }
         }
     }
+
+    static AiOutcome Copy(AiOutcome r, string source) => new AiOutcome { Ok = r.Ok, Error = r.Error, Taste = r.Taste, Titles = r.Titles, Source = source };
 
     static AiOutcome Fail(string code) => new AiOutcome { Ok = false, Error = code };
 

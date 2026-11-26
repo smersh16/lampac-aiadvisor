@@ -346,7 +346,8 @@ public class AiAdvisorController : BaseController
             success = result.Ok,
             error = result.Error,
             taste = result.Taste,
-            titles = result.Titles
+            titles = result.Titles,
+            source = result.Source
         }), "application/json; charset=utf-8");
     }
 

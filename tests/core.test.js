@@ -299,4 +299,17 @@ test('ручные отметки «уже смотрел» дополняют �
     assert.strictEqual(prof.seeds[0].x, undefined, 'реальная история идёт в основу подбора первой');
 });
 
+test('штраф жанров по «брошено» считается относительно обычной истории', () => {
+    const history = [];
+    for (let i = 0; i < 10; i++) history.push({ g: [16].concat(i < 4 ? [35] : [], i < 6 ? [10765] : []) });
+    const thrown = {};
+    for (let i = 0; i < 3; i++) thrown['tv:' + i] = { cat: 'anime', g: [16, 35, 10765] };
+    thrown['tv:99'] = { cat: 'tv', g: [18] };
+    const neg = Core.negativeGenres(thrown, history, 'anime');
+    assert.strictEqual(neg[16], undefined, 'жанр, который есть у всей истории, штрафа не получает');
+    assert.ok(Math.abs(neg[35] - 0.6) < 1e-9 && Math.abs(neg[10765] - 0.4) < 1e-9, 'штраф = разница долей');
+    assert.strictEqual(neg[18], undefined, 'чужая категория не учитывается');
+    assert.deepStrictEqual(Core.negativeGenres({}, history, 'anime'), {});
+});
+
 console.log('\n' + passed + ' тестов прошло');

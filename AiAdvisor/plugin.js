@@ -163,6 +163,28 @@
 
         var MARK_FACTOR = 0.4;
 
+        // Штраф жанров по «брошено/не интересно»: учитывается только то, насколько жанр у брошенного встречается чаще,
+        // чем у обычной истории (иначе брошенное аниме обнулило бы любимые жанры, которые есть у всего аниме)
+        function negativeGenres(thrown, items, cat) {
+            var dropped = [];
+            for (var k in thrown) if (thrown[k].cat === cat) dropped.push(thrown[k]);
+            if (!dropped.length) return {};
+
+            var total = (items || []).length;
+            var seen = {};
+            (items || []).forEach(function (it) { (it.g || []).forEach(function (g) { seen[g] = (seen[g] || 0) + 1; }); });
+            var counts = {};
+            dropped.forEach(function (it) { (it.g || []).forEach(function (g) { counts[g] = (counts[g] || 0) + 1; }); });
+
+            var scale = Math.min(1, dropped.length / 3);
+            var neg = {};
+            for (var g in counts) {
+                var lift = counts[g] / dropped.length - (total ? (seen[g] || 0) / total : 0);
+                if (lift > 0) neg[g] = lift * scale;
+            }
+            return neg;
+        }
+
         function buildProfile(items) {
             var byTime = function (a, b) { return (b.ts || 0) - (a.ts || 0); };
             // ручные отметки «уже смотрел» (x=2) дополняют реальную историю: свой порядок, вес ниже, в основу подбора идут после неё
@@ -206,6 +228,8 @@
             return !/[а-яё]/i.test(title) && title === orig;
         }
 
+        var lastReject = '';
+
         function score(cand, ctx) {
             var prefs = ctx.prefs;
             var profile = ctx.profile;
@@ -215,19 +239,20 @@
             var votes = cand.vote_count || 0;
             var rating = cand.vote_average || 0;
 
-            if (ctx.watched && ctx.watched[seenKey(mediaOf(cand), cand.id)]) return null;
-            if (untranslated(cand)) return null;
-            if (prefs.year_from && year && year < prefs.year_from) return null;
-            if (prefs.min_rating && votes >= 50 && rating < prefs.min_rating) return null;
+            lastReject = '';
+            if (ctx.watched && ctx.watched[seenKey(mediaOf(cand), cand.id)]) { lastReject = 'уже в истории, закладках или отметках'; return null; }
+            if (untranslated(cand)) { lastReject = 'нет русского названия'; return null; }
+            if (prefs.year_from && year && year < prefs.year_from) { lastReject = 'старше года из настроек (' + year + ')'; return null; }
+            if (prefs.min_rating && votes >= 50 && rating < prefs.min_rating) { lastReject = 'рейтинг ниже порога (' + rating + ')'; return null; }
 
             for (var i = 0; i < gs.length; i++) {
-                if (prefs.disliked.indexOf(gs[i]) >= 0) return null;
+                if (prefs.disliked.indexOf(gs[i]) >= 0) { lastReject = 'жанр из «не показывать» (' + gs[i] + ')'; return null; }
             }
 
             if (prefs.stop.length) {
                 var hay = (titleOf(cand) + ' ' + (cand.original_title || cand.original_name || '') + ' ' + (cand.overview || '')).toLowerCase();
                 for (var j = 0; j < prefs.stop.length; j++) {
-                    if (hay.indexOf(prefs.stop[j]) >= 0) return null;
+                    if (hay.indexOf(prefs.stop[j]) >= 0) { lastReject = 'стоп-слово «' + prefs.stop[j] + '»'; return null; }
                 }
             }
 
@@ -448,6 +473,8 @@
             normalizePrefs: normalizePrefs,
             buildProfile: buildProfile,
             score: score,
+            rejectReason: function () { return lastReject; },
+            negativeGenres: negativeGenres,
             untranslated: untranslated,
             completionWeight: completionWeight,
             metaFrom: metaFrom,
@@ -466,12 +493,12 @@
     // ряды и настройки регистрируются по два раза
     if (window.aiadvisor_loaded) return;
     window.aiadvisor_loaded = true;
-    window.aiadvisor_version = '0.27';
+    window.aiadvisor_version = '0.28';
 
     // =====================================================================
     //  Часть Lampa
     // =====================================================================
-    var VERSION = '0.27';
+    var VERSION = '0.28';
     var HOST = '{localhost}';
     var TOKEN = '{token}';
     var CACHE_HOURS = 6;
@@ -1024,12 +1051,15 @@
         return ' · Последняя попытка не удалась: ' + text;
     }
 
+    var lastAiBody = '';
+
     function postAi(cat, sig, cached, body, cb) {
+        lastAiBody = body;
         var net = new Lampa.Reguest();
         net.timeout(100000);
         net.silent(apiUrl('/aiadvisor/ai'), function (json) {
             if (json && json.success && json.titles && json.titles.length) {
-                var entry = { sig: sig, ts: Date.now(), taste: json.taste || '', titles: json.titles };
+                var entry = { sig: sig, ts: Date.now(), taste: json.taste || '', titles: json.titles, src: json.source || '' };
                 Lampa.Storage.set(aiKey(cat), entry);
                 setAiStatus(cat, '');
                 cb(entry);
@@ -1049,6 +1079,7 @@
         var medias = cat === 'tv' ? ['tv'] : cat === 'movie' ? ['movie'] : ['tv', 'movie'];
         var parsed = titles.map(Core.parseAiTitle).filter(Boolean).slice(0, 40);
         var found = new Array(parsed.length);
+        var near = new Array(parsed.length);
         var left = parsed.length * medias.length;
         if (!left) return cb([]);
 
@@ -1057,7 +1088,7 @@
             var out = [];
             var misses = [];
             found.forEach(function (c, idx) {
-                if (!c) { misses.push(parsed[idx].title); return; }
+                if (!c) { misses.push(parsed[idx].title + (parsed[idx].year ? ' (' + parsed[idx].year + ')' : '') + (near[idx] ? ' → в поиске TMDB: ' + near[idx].join(', ') : ' → в поиске TMDB пусто')); return; }
                 var k = Core.seenKey(Core.mediaOf(c), c.id);
                 if (seen[k]) return;
                 seen[k] = true;
@@ -1071,6 +1102,12 @@
                 enqueue(function (release) {
                     tmdbGet('search/' + media, { query: encodeURIComponent(p.title) }, function (json) {
                         if (!found[idx]) found[idx] = Core.matchAi(p, json && json.results, media);
+                        if (!found[idx] && json && json.results && json.results.length) {
+                            near[idx] = (near[idx] || []).concat(json.results.slice(0, 2).map(function (r) {
+                                var y = (r.release_date || r.first_air_date || '').slice(0, 4);
+                                return (r.title || r.name) + (y ? ' (' + y + ')' : '');
+                            }));
+                        }
                         release();
                         if (--left === 0) finish();
                     }, function () {
@@ -1131,13 +1168,18 @@
                 var valid = cards.filter(function (c) {
                     var name = c.title || c.name;
                     if (Core.categoryOf(c) !== cat) { rejected.push(name + ' — другая категория (' + Core.categoryOf(c) + ')'); return false; }
-                    if (Core.score(c, rankCtx) === null) { rejected.push(name + ' — отсеяно (уже смотрели, жанр/стоп-слово/язык/год/рейтинг)'); return false; }
+                    if (Core.score(c, rankCtx) === null) { rejected.push(name + ' — ' + (Core.rejectReason() || 'отсеяно')); return false; }
                     if (timelineWatched(c)) { rejected.push(name + ' — просмотрено по таймлайну'); return false; }
                     return true;
                 });
                 valid.forEach(function (c) { c.overview = 'Рекомендует ИИ. ' + (c.overview || ''); });
                 if (debug) {
-                    console.log('[aiadvisor] ИИ: не найдено в TMDB (' + (misses || []).length + '):', (misses || []).join(' | ') || '—');
+                    console.log('[aiadvisor] ИИ: ответ', ({ new: 'новый', cache: 'из кэша сервера', interval: 'прежний (новый не чаще раза в 10 минут)' })[ai.src] || ai.src || '?', '; названий получено', ai.titles.length);
+                    try {
+                        var sent = JSON.parse(lastAiBody || '{}');
+                        console.log('[aiadvisor] ИИ: образец запроса —', JSON.stringify((sent.history || []).slice(0, 2)), '| skip:', JSON.stringify((sent.skip || []).slice(0, 1)));
+                    } catch (e) { /* без образца */ }
+                    console.log('[aiadvisor] ИИ: не найдено в TMDB (' + (misses || []).length + '):\n' + ((misses || []).join('\n') || '—'));
                     console.log('[aiadvisor] ИИ: отсеяно (' + rejected.length + '):\n' + (rejected.join('\n') || '—'));
                     console.log('[aiadvisor] ИИ: вкус —', ai.taste);
                     console.log('[aiadvisor] ИИ: предложено', ai.titles.length, ', найдено в TMDB и прошло фильтры', valid.length, ':',
@@ -1164,7 +1206,7 @@
             if (cached) return cb(cached);
 
             var profile = Core.buildProfile(items);
-            profile.neg = negativeGenres(data.thrown || {}, cat);
+            profile.neg = Core.negativeGenres(data.thrown || {}, items, cat);
 
             if (debug) {
                 console.log('[aiadvisor] версия', VERSION);
@@ -1524,17 +1566,7 @@
     }
 
     // Доля «брошенных» записей категории, где есть жанр, с плавным ростом: одна запись не доминирует
-    function negativeGenres(thrown, cat) {
-        var items = [];
-        for (var k in thrown) if (thrown[k].cat === cat) items.push(thrown[k]);
-        if (!items.length) return {};
-        var counts = {};
-        items.forEach(function (it) { it.g.forEach(function (g) { counts[g] = (counts[g] || 0) + 1; }); });
-        var scale = Math.min(1, items.length / 3);
-        var neg = {};
-        for (var g in counts) neg[g] = (counts[g] / items.length) * scale;
-        return neg;
-    }
+
 
     // Просмотр по таймлайну Lampa (прогресс серий/фильма) есть и у тех, кого нет в «Истории».
     // Lampa.Timeline.watched: сериал — серии 1–24 первого сезона по original_name, фильм — по original_title.
