@@ -54,9 +54,9 @@ public static class AiClient
     static string token;
     static DateTime tokenUntil;
 
-    public static async Task<AiOutcome> Recommend(string key, string cat, List<string> historyLines)
+    public static async Task<AiOutcome> Recommend(string key, string cat, List<string> historyLines, List<string> skipLines)
     {
-        string hash = Convert.ToHexString(SHA1.HashData(Encoding.UTF8.GetBytes(cat + "\n" + string.Join("\n", historyLines))));
+        string hash = Convert.ToHexString(SHA1.HashData(Encoding.UTF8.GetBytes(cat + "\n" + string.Join("\n", historyLines) + "\n--\n" + string.Join("\n", skipLines))));
 
         if (cache.TryGetValue(key, out var hit) && hit.hash == hash && DateTime.UtcNow - hit.at < CacheTtl)
             return hit.result;
@@ -82,7 +82,7 @@ public static class AiClient
             if (client == null)
                 return Remember(key, Fail("no_certificates"));
 
-            string answer = await Ask(client, conf, Prompt(cat, historyLines));
+            string answer = await Ask(client, conf, Prompt(cat, historyLines, skipLines));
             var result = Parse(answer);
 
             if (!result.Ok)
@@ -136,9 +136,14 @@ public static class AiClient
         }
     }
 
-    static string Prompt(string cat, List<string> historyLines)
+    static string Prompt(string cat, List<string> historyLines, List<string> skipLines)
     {
+        string skip = skipLines.Count == 0 ? string.Empty
+            : "Пользователю не интересно или он бросил (учти это при определении вкуса и не предлагай такое и похожее):\n"
+              + string.Join("\n", skipLines) + "\n\n";
+
         return "История просмотров пользователя (категория: " + cat + "):\n" + string.Join("\n", historyLines) + "\n\n"
+            + skip
             + "Сначала одной строкой, начиная со слова ВКУС:, опиши вкус пользователя. "
             + "Затем предложи 20 названий, которые могут понравиться, включая малоизвестные, "
             + "но не из истории выше. Каждое название с новой строки в формате: Название (год). "

@@ -115,7 +115,7 @@ function run(name) {
     assert.ok(rows.every(r => r.screen.includes('main')));
     assert.ok(settings.length > 20, 'настройки зарегистрированы');
     const ver = settings.find(p => p.param.name === 'aiadvisor_version');
-    assert.ok(ver && ver.field.description === '0.16', 'версия показана в настройках');
+    assert.ok(ver && ver.field.description === '0.17', 'версия показана в настройках');
 
     // повторная загрузка плагина не дублирует ряды и настройки
     const settingsBefore = settings.length;
@@ -201,6 +201,23 @@ function run(name) {
     const aiPost = posts.filter(p => p.url.includes('/aiadvisor/ai')).pop();
     assert.ok(aiPost && aiPost.body.cat === 'anime' && aiPost.body.history.length >= 1, 'на сервер ушла история группы');
     assert.ok(!('uid' in aiPost.body), 'идентификаторов пользователя в теле нет');
+    // «Брошено» (Lampa) и «Не интересно» (журнал) уходят ИИ отдельным списком своей группы
+    global.__fav = { thrown: [{ id: 91, name: 'Брошенное аниме', first_air_date: '2019-01-01', genre_ids: [16, 35], original_language: 'ja' }] };
+    global.__seen = { anime: [{ id: 92, media: 'tv', cat: 'anime', t: 'Скучное аниме', y: 2018, g: [16, 18], l: 'ja', ts: Date.now(), x: 1, p: -1 }], cartoon: [], tv: [], movie: [] };
+    store['aiadvisor_ai_anime'] = '';
+    window.aiadvisorReset();
+    await run('aiadvisor_anime');
+    await new Promise(r => setTimeout(r, 100));
+    const skipPost = posts.filter(p => p.url.includes('/aiadvisor/ai')).pop();
+    const skipTitles = (skipPost.body.skip || []).map(e => e.t).sort();
+    assert.deepStrictEqual(skipTitles, ['Брошенное аниме', 'Скучное аниме'], 'ИИ получил «брошено» и «не интересно» своей группы');
+    global.__fav = {};
+    global.__seen = null;
+    store['aiadvisor_ai_anime'] = '';
+    window.aiadvisorReset();
+    await run('aiadvisor_anime');
+    await new Promise(r => setTimeout(r, 100));
+
     // кэш ответа ИИ на 24 часа: второй расчёт не обращается к серверу
     const aiCalls = posts.filter(p => p.url.includes('/aiadvisor/ai')).length;
     window.aiadvisorReset();

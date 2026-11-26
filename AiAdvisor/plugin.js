@@ -425,12 +425,12 @@
     // ряды и настройки регистрируются по два раза
     if (window.aiadvisor_loaded) return;
     window.aiadvisor_loaded = true;
-    window.aiadvisor_version = '0.16';
+    window.aiadvisor_version = '0.17';
 
     // =====================================================================
     //  Часть Lampa
     // =====================================================================
-    var VERSION = '0.16';
+    var VERSION = '0.17';
     var HOST = '{localhost}';
     var TOKEN = '{token}';
     var CACHE_HOURS = 6;
@@ -613,7 +613,7 @@
             watched[k] = true;
             // «Не интересно» (x=1): исключаем и снижаем жанры, но историей просмотра это не считается
             if (map[k].x === 1) {
-                if (hasGenres(map[k])) skipped[k] = { cat: map[k].cat, g: map[k].g };
+                if (hasGenres(map[k])) skipped[k] = { cat: map[k].cat, g: map[k].g, t: map[k].t, y: map[k].y };
                 continue;
             }
             if (byCat[map[k].cat]) byCat[map[k].cat].push(map[k]);
@@ -788,15 +788,28 @@
         return items.slice().sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); }).slice(0, 60);
     }
 
-    function aiSig(recent) {
-        return recent.map(function (i) { return i.media + i.id + ':' + (i.p === undefined ? -1 : i.p); }).join(',');
+    // «Брошено» и «Не интересно» группы: уходят ИИ отдельным списком (только записи с названием)
+    function aiSkips(cat, thrown) {
+        var out = [];
+        for (var k in thrown || {}) {
+            var e = thrown[k];
+            if (e.cat !== cat || !e.t) continue;
+            out.push({ k: k, t: e.t, y: e.y || 0, g: genreNames((e.g || []).filter(function (g) { return g !== 16; })) });
+        }
+        out.sort(function (a, b) { return a.k < b.k ? -1 : 1; });
+        return out.slice(0, 30);
     }
 
-    function fetchAi(cat, items, cb) {
+    function aiSig(recent, skips) {
+        return recent.map(function (i) { return i.media + i.id + ':' + (i.p === undefined ? -1 : i.p); }).join(',')
+            + '|' + (skips || []).map(function (e) { return e.k; }).join(',');
+    }
+
+    function fetchAi(cat, items, skips, cb) {
         var recent = aiRecent(items);
         if (!recent.length) return cb(null);
 
-        var sig = aiSig(recent);
+        var sig = aiSig(recent, skips);
         var cached = aiCached(cat);
         if (cached && cached.sig === sig && Date.now() - cached.ts < AI_TTL && cached.titles) return cb(cached);
 
@@ -804,7 +817,8 @@
             cat: cat,
             history: recent.map(function (i) {
                 return { t: i.t, y: i.y, p: i.p === undefined ? -1 : i.p, g: genreNames((i.g || []).filter(function (g) { return g !== 16; })) };
-            })
+            }),
+            skip: skips.map(function (e) { return { t: e.t, y: e.y, g: e.g }; })
         });
 
         var net = new Lampa.Reguest();
@@ -864,26 +878,28 @@
     // подбора и последнего известного ответа ИИ (даже устаревшего). Свежий ответ применится при следующем открытии.
     var aiPending = {};
 
-    function refreshAiInBackground(cat, items) {
+    function refreshAiInBackground(cat, items, skips) {
         if (aiPending[cat]) return;
         aiPending[cat] = true;
-        fetchAi(cat, items, function (ai) {
+        fetchAi(cat, items, skips, function (ai) {
             aiPending[cat] = false;
             // новый ответ: сбрасываем кэш ряда, чтобы следующее открытие главной его учло
             if (ai && ai.titles) Lampa.Storage.set(storageKey(cat, 'cache'), '');
         });
     }
 
-    function withAi(cat, prefs, items, rankCtx, results, debug, done) {
+    function withAi(cat, prefs, items, rankCtx, results, debug, thrown, done) {
         if (!prefs.ai) return done(results);
 
+        var skips = aiSkips(cat, thrown);
+
         // aiadvisorDebug ждёт ответ ИИ, чтобы показать его в консоли
-        if (debug) return withAiBlocking(cat, prefs, items, rankCtx, results, debug, done);
+        if (debug) return withAiBlocking(cat, prefs, items, rankCtx, results, debug, skips, done);
 
         var recent = aiRecent(items);
         var cached = aiCached(cat);
-        var fresh = cached && cached.titles && cached.sig === aiSig(recent) && Date.now() - cached.ts < AI_TTL;
-        if (!fresh && recent.length) refreshAiInBackground(cat, items);
+        var fresh = cached && cached.titles && cached.sig === aiSig(recent, skips) && Date.now() - cached.ts < AI_TTL;
+        if (!fresh && recent.length) refreshAiInBackground(cat, items, skips);
 
         if (!cached || !cached.titles) return done(results);
 
@@ -896,8 +912,8 @@
         });
     }
 
-    function withAiBlocking(cat, prefs, items, rankCtx, results, debug, done) {
-        fetchAi(cat, items, function (ai) {
+    function withAiBlocking(cat, prefs, items, rankCtx, results, debug, skips, done) {
+        fetchAi(cat, items, skips, function (ai) {
             if (!ai || !ai.titles) {
                 if (debug) console.log('[aiadvisor] ИИ недоступен:', ai && ai.error);
                 return done(results);
@@ -990,7 +1006,7 @@
 
                 if (limit) return cb(results);
 
-                withAi(cat, prefs, items, rankCtx, results, debug, function (final) {
+                withAi(cat, prefs, items, rankCtx, results, debug, data.thrown || {}, function (final) {
                     cacheSet(cat, sig, final);
                     cb(final);
                 });
@@ -1181,7 +1197,7 @@
             var media = Core.mediaOf(c);
             var k = Core.seenKey(media, c.id);
             if (cache[k]) { out[k] = cache[k]; return; }
-            if (Core.genreIds(c).length) { out[k] = { cat: Core.categoryOf(c), g: Core.genreIds(c) }; cache[k] = out[k]; return; }
+            if (Core.genreIds(c).length) { out[k] = { cat: Core.categoryOf(c), g: Core.genreIds(c), t: c.title || c.name || '', y: Core.yearOf(c) }; cache[k] = out[k]; return; }
             todo.push({ k: k, media: media, id: c.id });
         });
 
@@ -1196,7 +1212,7 @@
                 if (d) {
                     d.media_type = t.media;
                     var g = Core.genreIds(d);
-                    if (g.length) { out[t.k] = { cat: Core.categoryOf(d), g: g }; cache[t.k] = out[t.k]; }
+                    if (g.length) { out[t.k] = { cat: Core.categoryOf(d), g: g, t: d.title || d.name || '', y: Core.yearOf(d) }; cache[t.k] = out[t.k]; }
                 }
                 if (--left === 0) finish();
             }, function () {

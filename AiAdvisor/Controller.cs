@@ -290,7 +290,31 @@ public class AiAdvisorController : BaseController
         if (lines.Count == 0)
             return Fail();
 
-        var result = await AiClient.Recommend(area + "|" + cat, cat, lines);
+        // «Брошено» и «Не интересно»: ИИ учитывает при определении вкуса и не предлагает подобное
+        var skipLines = new List<string>();
+        if (src["skip"] is JArray skip)
+        {
+            foreach (var token in skip.Take(30))
+            {
+                if (token is not JObject h)
+                    continue;
+
+                string title = Oneline(h.Value<string>("t"), 120);
+                if (title.Length == 0)
+                    continue;
+
+                int year = h.Value<int?>("y") ?? 0;
+                string genres = Oneline(h.Value<string>("g"), 80);
+
+                var sb = new StringBuilder("- ").Append(title).Append(" (").Append(year > 0 ? year.ToString() : "?").Append(")");
+                if (genres.Length > 0)
+                    sb.Append(" [").Append(genres).Append(']');
+
+                skipLines.Add(sb.ToString());
+            }
+        }
+
+        var result = await AiClient.Recommend(area + "|" + cat, cat, lines, skipLines);
 
         return ContentTo(JsonConvert.SerializeObject(new
         {
