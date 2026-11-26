@@ -466,12 +466,12 @@
     // ряды и настройки регистрируются по два раза
     if (window.aiadvisor_loaded) return;
     window.aiadvisor_loaded = true;
-    window.aiadvisor_version = '0.23';
+    window.aiadvisor_version = '0.24';
 
     // =====================================================================
     //  Часть Lampa
     // =====================================================================
-    var VERSION = '0.23';
+    var VERSION = '0.24';
     var HOST = '{localhost}';
     var TOKEN = '{token}';
     var CACHE_HOURS = 6;
@@ -1650,7 +1650,8 @@
 
     // Сравнение нашей классификации «аниме/мультфильм» с ключевым словом TMDB «anime» и со справочником Shikimori
     // по вашей истории (только анимация). Повторите вызов, пока не останется «ожидают».
-    window.aiadvisorAnimeCheck = function () {
+    window.aiadvisorAnimeCheck = function (offset) {
+        offset = offset > 0 ? offset : 0;
         prepare(function (data) {
             var refs = [];
             var info = {};
@@ -1667,7 +1668,7 @@
             ensureMeta(refs, function (meta) {
                 var net = new Lampa.Reguest();
                 net.timeout(60000);
-                var ask = refs.slice(0, 40).map(function (r) { return { k: r.key, t: info[r.key].t, o: (meta[r.key] || {}).on || '', y: info[r.key].y }; });
+                var ask = refs.slice(offset, offset + 40).map(function (r) { return { k: r.key, t: info[r.key].t, o: (meta[r.key] || {}).on || '', y: info[r.key].y }; });
 
                 net.silent(apiUrl('/aiadvisor/shiki'), function (json) {
                     var shiki = {};
@@ -1683,7 +1684,7 @@
                         var ours = info[a.k].cat === 'anime' ? 'да' : 'нет';
                         rows.push((ours === sh && (tm === '?' || tm === ours) ? '  ' : '! ') + a.t + ' (' + a.y + ') — у нас аниме: ' + ours + ', TMDB-слово: ' + tm + ', Shikimori: ' + sh);
                     });
-                    console.log('[aiadvisor] ожидают ответа Shikimori:', pending, '; показано', ask.length, 'из', refs.length, '(строки с «!» — расхождения):\n' + rows.join('\n'));
+                    console.log('[aiadvisor] ожидают ответа Shikimori:', pending, '; показано', ask.length, 'из', refs.length, '(с ' + offset + '; следующие: aiadvisorAnimeCheck(' + (offset + 40) + '))', '(строки с «!» — расхождения):\n' + rows.join('\n'));
                 }, function () {
                     console.log('[aiadvisor] сервер не ответил на /aiadvisor/shiki (нет обновления сервера или Shikimori недоступен)');
                 }, JSON.stringify(ask), { headers: { 'Content-Type': 'application/json' } });
