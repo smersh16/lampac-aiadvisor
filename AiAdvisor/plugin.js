@@ -465,12 +465,12 @@
     // ряды и настройки регистрируются по два раза
     if (window.aiadvisor_loaded) return;
     window.aiadvisor_loaded = true;
-    window.aiadvisor_version = '0.21';
+    window.aiadvisor_version = '0.22';
 
     // =====================================================================
     //  Часть Lampa
     // =====================================================================
-    var VERSION = '0.21';
+    var VERSION = '0.22';
     var HOST = '{localhost}';
     var TOKEN = '{token}';
     var CACHE_HOURS = 6;
@@ -1647,30 +1647,45 @@
         }, false, 40);
     };
 
-    // Сравнение нашей классификации «аниме/мультфильм» с ключевым словом TMDB «anime» по вашей истории
+    // Сравнение нашей классификации «аниме/мультфильм» с ключевым словом TMDB «anime» и со справочником Shikimori
+    // по вашей истории (только анимация). Повторите вызов, пока не останется «ожидают».
     window.aiadvisorAnimeCheck = function () {
         prepare(function (data) {
             var refs = [];
-            var cats = {};
+            var info = {};
             Core.CATS.forEach(function (c) {
                 (data.merged.byCat[c] || []).forEach(function (i) {
                     if ((i.g || []).indexOf(16) < 0) return;
-                    refs.push({ key: i.media + ':' + i.id, media: i.media, id: i.id });
-                    cats[i.media + ':' + i.id] = { cat: c, t: i.t, y: i.y };
+                    var k = i.media + ':' + i.id;
+                    refs.push({ key: k, media: i.media, id: i.id });
+                    info[k] = { cat: c, t: i.t, y: i.y };
                 });
             });
-            console.log('[aiadvisor] анимация в истории:', refs.length, '; запрашиваю ключевые слова (до ' + META_BATCH + ')…');
+            console.log('[aiadvisor] анимация в истории:', refs.length, '; запрашиваю ключевые слова TMDB и Shikimori…');
+
             ensureMeta(refs, function (meta) {
-                var agree = [], conflict = [], unknown = 0;
-                refs.forEach(function (r) {
-                    var m = meta[r.key];
-                    if (!m || m.an === undefined) { unknown++; return; }
-                    var info = cats[r.key];
-                    var line = info.t + ' (' + info.y + ') — у нас: ' + info.cat + ', в TMDB слово anime: ' + (m.an ? 'да' : 'нет');
-                    ((info.cat === 'anime') === !!m.an ? agree : conflict).push(line);
-                });
-                console.log('[aiadvisor] совпадает с TMDB:', agree.length, '; расходится:', conflict.length, '; нет данных:', unknown);
-                console.log('[aiadvisor] расхождения:\n' + (conflict.join('\n') || '—'));
+                var net = new Lampa.Reguest();
+                net.timeout(60000);
+                var ask = refs.slice(0, 40).map(function (r) { return { k: r.key, t: info[r.key].t, y: info[r.key].y }; });
+
+                net.silent(apiUrl('/aiadvisor/shiki'), function (json) {
+                    var shiki = {};
+                    ((json && json.items) || []).forEach(function (e) { shiki[e.k] = e; });
+                    var rows = [];
+                    var pending = 0;
+                    ask.forEach(function (a) {
+                        var m = meta[a.k] || {};
+                        var s = shiki[a.k] || { pending: true };
+                        if (s.pending) pending++;
+                        var tm = m.an === undefined ? '?' : (m.an ? 'да' : 'нет');
+                        var sh = s.pending ? '?' : (s.found ? 'да' : 'нет');
+                        var ours = info[a.k].cat === 'anime' ? 'да' : 'нет';
+                        rows.push((ours === sh && (tm === '?' || tm === ours) ? '  ' : '! ') + a.t + ' (' + a.y + ') — у нас аниме: ' + ours + ', TMDB-слово: ' + tm + ', Shikimori: ' + sh);
+                    });
+                    console.log('[aiadvisor] ожидают ответа Shikimori:', pending, '; показано', ask.length, 'из', refs.length, '(строки с «!» — расхождения):\n' + rows.join('\n'));
+                }, function () {
+                    console.log('[aiadvisor] сервер не ответил на /aiadvisor/shiki (нет обновления сервера или Shikimori недоступен)');
+                }, JSON.stringify(ask), { headers: { 'Content-Type': 'application/json' } });
             });
         });
     };

@@ -4,6 +4,7 @@
   "tree": [
     "AiClient.cs",
     "Controller.cs",
-    "ModInit.cs"
+    "ModInit.cs",
+    "ShikiClient.cs"
   ]
 }

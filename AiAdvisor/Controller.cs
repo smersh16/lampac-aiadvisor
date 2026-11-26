@@ -243,6 +243,48 @@ public class AiAdvisorController : BaseController
     }
     #endregion
 
+    #region /aiadvisor/shiki
+    /// <summary>
+    /// Тело: [{ k: "tv:123", t, y }] (до 40). Ответ: { success, items: [{ k, found, kind, score, pending }] }.
+    /// pending: не успели или Shikimori недоступен; повторите позже, готовое лежит в кэше.
+    /// </summary>
+    [HttpPost]
+    [Route("/aiadvisor/shiki")]
+    async public Task<ActionResult> Shiki()
+    {
+        if (UserArea() == null)
+            return Fail();
+
+        var body = await ReadBody();
+        if (body is not JArray list)
+            return Fail();
+
+        var items = new JArray();
+        var started = DateTime.UtcNow;
+
+        foreach (var token in list.Take(40))
+        {
+            if (token is not JObject h)
+                continue;
+
+            string key = Oneline(h.Value<string>("k"), 40);
+            string title = Oneline(h.Value<string>("t"), 120);
+            if (key.Length == 0 || title.Length == 0)
+                continue;
+
+            ShikiResult r = DateTime.UtcNow - started < TimeSpan.FromSeconds(25)
+                ? await ShikiClient.Lookup(title, h.Value<int?>("y") ?? 0)
+                : null;
+
+            items.Add(r == null
+                ? new JObject { ["k"] = key, ["pending"] = true }
+                : new JObject { ["k"] = key, ["found"] = r.Found, ["kind"] = r.Kind, ["score"] = r.Score });
+        }
+
+        return ContentTo(new JObject { ["success"] = true, ["items"] = items }.ToString(Formatting.None), "application/json; charset=utf-8");
+    }
+    #endregion
+
     #region /aiadvisor/ai
     /// <summary>
     /// Тело: { cat, history: [{ t, y, p, g }] }. Ответ: { success, error, taste, titles[] }.
