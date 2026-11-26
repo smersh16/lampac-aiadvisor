@@ -122,7 +122,7 @@ function run(name) {
     assert.ok(rows.every(r => r.screen.includes('main')));
     assert.ok(settings.length > 20, 'настройки зарегистрированы');
     const ver = settings.find(p => p.param.name === 'aiadvisor_version');
-    assert.ok(ver && ver.field.description === '0.28', 'версия показана в настройках');
+    assert.ok(ver && ver.field.description === '0.29', 'версия показана в настройках');
 
     // повторная загрузка плагина не дублирует ряды и настройки
     const settingsBefore = settings.length;
@@ -213,12 +213,15 @@ function run(name) {
     global.__fav = { thrown: [{ id: 91, name: 'Брошенное аниме', first_air_date: '2019-01-01', genre_ids: [16, 35], original_language: 'ja' }] };
     global.__seen = { anime: [{ id: 92, media: 'tv', cat: 'anime', t: 'Скучное аниме', y: 2018, g: [16, 18], l: 'ja', ts: Date.now(), x: 1, p: -1 }], cartoon: [], tv: [], movie: [] };
     store['aiadvisor_ai_anime'] = '';
+    store['aiadvisor_anime_year_from'] = '2015';
     window.aiadvisorReset();
     await run('aiadvisor_anime');
     await new Promise(r => setTimeout(r, 100));
+    store['aiadvisor_anime_year_from'] = '';
     const skipPost = posts.filter(p => p.url.includes('/aiadvisor/ai')).pop();
     const skipTitles = (skipPost.body.skip || []).map(e => e.t).sort();
     assert.deepStrictEqual(skipTitles, ['Брошенное аниме', 'Скучное аниме'], 'ИИ получил «брошено» и «не интересно» своей группы');
+    assert.strictEqual(skipPost.body.rules && skipPost.body.rules.y, 2015, 'ИИ получил правило «не старше года»');
     const rich = skipPost.body.skip.find(e => e.t === 'Скучное аниме');
     assert.deepStrictEqual([rich.r, rich.d, rich.a, rich.k, rich.c, rich.s, rich.o], [5.5, 'Автор Скучный', 'Актёр А, Актёр Б', 'школа', 'JP', 'White Fox', 'Скучный сюжет про ничего'], 'ИИ получил рейтинг, автора, актёров, сюжет и т.д. (студия аниме — по Shikimori)');
     assert.ok(Object.keys(store['aiadvisor_meta'] || {}).length >= 1, 'метаданные закэшированы на устройстве');

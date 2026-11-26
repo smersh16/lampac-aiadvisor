@@ -339,7 +339,24 @@ public class AiAdvisorController : BaseController
             }
         }
 
-        var result = await AiClient.Recommend(area + "|" + cat, cat, lines, skipLines);
+        // правила пользователя (год, жанры, стоп-слова): ИИ не предлагает то, что всё равно отсеется
+        var rules = new List<string>();
+        if (src["rules"] is JObject ro)
+        {
+            int ruleYear = ro.Value<int?>("y") ?? 0;
+            if (ruleYear >= 1900 && ruleYear <= 2100)
+                rules.Add("не предлагай ничего старше " + ruleYear + " года выпуска");
+
+            string ruleGenres = Oneline(ro.Value<string>("d"), 120);
+            if (ruleGenres.Length > 0)
+                rules.Add("не предлагай жанры: " + ruleGenres);
+
+            string ruleStop = Oneline(ro.Value<string>("s"), 120);
+            if (ruleStop.Length > 0)
+                rules.Add("не предлагай, если в названии или описании встречается: " + ruleStop);
+        }
+
+        var result = await AiClient.Recommend(area + "|" + cat, cat, lines, skipLines, string.Join("; ", rules));
 
         return ContentTo(JsonConvert.SerializeObject(new
         {

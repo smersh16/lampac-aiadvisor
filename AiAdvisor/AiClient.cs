@@ -59,9 +59,9 @@ public static class AiClient
     static string token;
     static DateTime tokenUntil;
 
-    public static async Task<AiOutcome> Recommend(string key, string cat, List<string> historyLines, List<string> skipLines)
+    public static async Task<AiOutcome> Recommend(string key, string cat, List<string> historyLines, List<string> skipLines, string rules = "")
     {
-        string hash = Convert.ToHexString(SHA1.HashData(Encoding.UTF8.GetBytes(cat + "\n" + string.Join("\n", historyLines))));
+        string hash = Convert.ToHexString(SHA1.HashData(Encoding.UTF8.GetBytes(cat + "\n" + string.Join("\n", historyLines) + "\n--\n" + rules)));
 
         if (cache.TryGetValue(key, out var hit) && hit.hash == hash && DateTime.UtcNow - hit.at < CacheTtl)
             return Copy(hit.result, "cache");
@@ -95,7 +95,7 @@ public static class AiClient
                 return Remember(key, Fail("no_certificates"));
 
             lastCall[key] = DateTime.UtcNow;
-            string answer = await Ask(client, conf, Prompt(cat, historyLines, skipLines));
+            string answer = await Ask(client, conf, Prompt(cat, historyLines, skipLines, rules));
             var result = Parse(answer);
 
             if (!result.Ok)
@@ -168,8 +168,10 @@ public static class AiClient
         }
     }
 
-    static string Prompt(string cat, List<string> historyLines, List<string> skipLines)
+    static string Prompt(string cat, List<string> historyLines, List<string> skipLines, string rules)
     {
+        string requirements = string.IsNullOrEmpty(rules) ? string.Empty : "Обязательные требования пользователя: " + rules + ". ";
+
         string skip = skipLines.Count == 0 ? string.Empty
             : "Пользователю не интересно или он бросил (учти это при определении вкуса и не предлагай такое и похожее):\n"
               + string.Join("\n", skipLines) + "\n\n";
@@ -179,6 +181,7 @@ public static class AiClient
             + "Учитывай жанры, режиссёров, актёров, страну и студию, рейтинг, ключевые слова и сюжет: "
             + "найди общее среди понравившегося и среди того, что не зашло. "
             + "Сначала в 2-3 предложениях, начиная со слова ВКУС:, опиши вкус пользователя (одной строкой). "
+            + requirements
             + "Затем предложи 30 названий, которые могут понравиться, включая малоизвестные, "
             + "но не из истории выше. Каждое название с новой строки в формате: Название (год). "
             + "Названия на русском, если есть общеизвестный перевод.";

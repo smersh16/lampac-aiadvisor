@@ -317,6 +317,15 @@
             return (list || []).slice(0, n).map(function (x) { return x && x.name; }).filter(Boolean);
         }
 
+        // Обрезка по границе слова, чтобы сюжет не обрывался посреди слова
+        function cutText(text, max) {
+            var t = String(text || '').replace(/\s+/g, ' ').trim();
+            if (t.length <= max) return t;
+            var cut = t.slice(0, max);
+            var sp = cut.lastIndexOf(' ');
+            return (sp > max * 0.6 ? cut.slice(0, sp) : cut).replace(/[\s,;:.\-—]+$/, '') + '…';
+        }
+
         function metaFrom(details, media) {
             if (!details) return null;
             var credits = details.credits || {};
@@ -334,7 +343,7 @@
                 d: directors.join(', '),
                 a: names(credits.cast, 4).join(', '),
                 k: names(kw, 6).join(', '),
-                o: String(details.overview || '').replace(/\s+/g, ' ').trim().slice(0, 180),
+                o: cutText(details.overview, 180),
                 c: countries.slice(0, 3).join(', '),
                 s: studio || '',
                 on: String(details.original_name || details.original_title || ''),
@@ -356,14 +365,24 @@
 
         // Из результатов поиска TMDB берём карточку, только если название совпало и год в пределах ±1:
         // так выдуманные моделью названия отсеиваются
-        function matchAi(parsed, results, media) {
+        // loose=true: смягчённое правило для названий, не найденных точно: название целиком входит в название результата
+        // (год ±1) либо это первый результат поиска с точно тем же годом (у TMDB часто другой русский перевод)
+        function matchAi(parsed, results, media, loose) {
             var want = normTitle(parsed.title);
             for (var i = 0; i < (results || []).length; i++) {
                 var r = results[i];
                 var names = [r.title, r.name, r.original_title, r.original_name].map(normTitle);
-                if (names.indexOf(want) < 0) continue;
                 var y = yearOf(r);
-                if (parsed.year && y && Math.abs(y - parsed.year) > 1) continue;
+                var yearOk = !parsed.year || !y || Math.abs(y - parsed.year) <= 1;
+
+                if (!loose) {
+                    if (names.indexOf(want) < 0 || !yearOk) continue;
+                } else {
+                    var contains = want.length >= 6 && yearOk && names.some(function (n) { return (' ' + n + ' ').indexOf(' ' + want + ' ') >= 0; });
+                    var sameYearFirst = i === 0 && parsed.year > 0 && y === parsed.year;
+                    if (!contains && !sameYearFirst) continue;
+                }
+
                 r.media_type = media;
                 return r;
             }
@@ -478,6 +497,7 @@
             untranslated: untranslated,
             completionWeight: completionWeight,
             metaFrom: metaFrom,
+            cutText: cutText,
             normTitle: normTitle,
             parseAiTitle: parseAiTitle,
             matchAi: matchAi,
@@ -493,12 +513,12 @@
     // ряды и настройки регистрируются по два раза
     if (window.aiadvisor_loaded) return;
     window.aiadvisor_loaded = true;
-    window.aiadvisor_version = '0.28';
+    window.aiadvisor_version = '0.29';
 
     // =====================================================================
     //  Часть Lampa
     // =====================================================================
-    var VERSION = '0.28';
+    var VERSION = '0.29';
     var HOST = '{localhost}';
     var TOKEN = '{token}';
     var CACHE_HOURS = 6;
@@ -979,15 +999,25 @@
         return out.slice(0, 30);
     }
 
-    function aiSig(recent, skips) {
-        return recent.map(function (i) { return i.media + i.id + ':' + (i.p === undefined ? -1 : i.p); }).join(',');  // список «не интересно» в ключ не входит: новая отметка не вызывает запрос к ИИ
+    // Правила пользователя для ИИ: год, «не показывать жанры», стоп-слова. ИИ не предлагает то, что всё равно будет отсеяно
+    function aiRules(cat) {
+        var p = Core.normalizePrefs(rawPrefs(cat));
+        var r = {};
+        if (p.year_from) r.y = p.year_from;
+        if (p.disliked.length) r.d = genreNames(p.disliked);
+        if (p.stop.length) r.s = p.stop.slice(0, 10).join(', ');
+        return r;
+    }
+
+    function aiSig(recent, skips, cat) {
+        return recent.map(function (i) { return i.media + i.id + ':' + (i.p === undefined ? -1 : i.p); }).join(',') + '|' + JSON.stringify(aiRules(cat));  // список «не интересно» в ключ не входит: новая отметка не вызывает запрос к ИИ
     }
 
     function fetchAi(cat, items, skips, cb) {
         var recent = aiRecent(items);
         if (!recent.length) return cb(null);
 
-        var sig = aiSig(recent, skips);
+        var sig = aiSig(recent, skips, cat);
         var cached = aiCached(cat);
         if (cached && cached.sig === sig && Date.now() - cached.ts < AI_TTL && cached.titles) return cb(cached);
 
@@ -1003,6 +1033,7 @@
             ensureShiki(shikiList, function (shiki) {
                 var body = JSON.stringify({
                     cat: cat,
+                    rules: aiRules(cat),
                     history: recent.map(function (i) {
                         var k = i.media + ':' + i.id;
                         var row = { t: i.t, y: i.y, p: i.p === undefined ? -1 : i.p, g: genreNames((i.g || []).filter(function (g) { return g !== 16; })) };
@@ -1051,10 +1082,10 @@
         return ' · Последняя попытка не удалась: ' + text;
     }
 
-    var lastAiBody = '';
+    var lastAiBody = {};
 
     function postAi(cat, sig, cached, body, cb) {
-        lastAiBody = body;
+        lastAiBody[cat] = body;
         var net = new Lampa.Reguest();
         net.timeout(100000);
         net.silent(apiUrl('/aiadvisor/ai'), function (json) {
@@ -1079,6 +1110,7 @@
         var medias = cat === 'tv' ? ['tv'] : cat === 'movie' ? ['movie'] : ['tv', 'movie'];
         var parsed = titles.map(Core.parseAiTitle).filter(Boolean).slice(0, 40);
         var found = new Array(parsed.length);
+        var loose = new Array(parsed.length);
         var near = new Array(parsed.length);
         var left = parsed.length * medias.length;
         if (!left) return cb([]);
@@ -1087,14 +1119,17 @@
             var seen = {};
             var out = [];
             var misses = [];
-            found.forEach(function (c, idx) {
+            var looseUsed = [];
+            found.forEach(function (strict, idx) {
+                var c = strict || loose[idx];
+                if (!strict && c) looseUsed.push(parsed[idx].title + (parsed[idx].year ? ' (' + parsed[idx].year + ')' : '') + ' → ' + (c.title || c.name));
                 if (!c) { misses.push(parsed[idx].title + (parsed[idx].year ? ' (' + parsed[idx].year + ')' : '') + (near[idx] ? ' → в поиске TMDB: ' + near[idx].join(', ') : ' → в поиске TMDB пусто')); return; }
                 var k = Core.seenKey(Core.mediaOf(c), c.id);
                 if (seen[k]) return;
                 seen[k] = true;
                 out.push(c);
             });
-            cb(out, misses);
+            cb(out, misses, looseUsed);
         }
 
         parsed.forEach(function (p, idx) {
@@ -1102,6 +1137,11 @@
                 enqueue(function (release) {
                     tmdbGet('search/' + media, { query: encodeURIComponent(p.title) }, function (json) {
                         if (!found[idx]) found[idx] = Core.matchAi(p, json && json.results, media);
+                        if (!found[idx]) {
+                            // смягчённое совпадение запоминаем отдельно: точное из другого поиска (tv/movie) важнее; из смягчённых берём популярнее
+                            var l = Core.matchAi(p, json && json.results, media, true);
+                            if (l && (!loose[idx] || (l.popularity || 0) > (loose[idx].popularity || 0))) loose[idx] = l;
+                        }
                         if (!found[idx] && json && json.results && json.results.length) {
                             near[idx] = (near[idx] || []).concat(json.results.slice(0, 2).map(function (r) {
                                 var y = (r.release_date || r.first_air_date || '').slice(0, 4);
@@ -1143,7 +1183,7 @@
 
         var recent = aiRecent(items);
         var cached = aiCached(cat);
-        var fresh = cached && cached.titles && cached.sig === aiSig(recent, skips) && Date.now() - cached.ts < AI_TTL;
+        var fresh = cached && cached.titles && cached.sig === aiSig(recent, skips, cat) && Date.now() - cached.ts < AI_TTL;
         if (!fresh && recent.length) refreshAiInBackground(cat, items, skips);
 
         if (!cached || !cached.titles) return done(results);
@@ -1163,7 +1203,7 @@
                 if (debug) console.log('[aiadvisor] ИИ недоступен:', ai && ai.error);
                 return done(results);
             }
-            resolveAi(cat, ai.titles, function (cards, misses) {
+            resolveAi(cat, ai.titles, function (cards, misses, looseUsed) {
                 var rejected = [];
                 var valid = cards.filter(function (c) {
                     var name = c.title || c.name;
@@ -1176,9 +1216,10 @@
                 if (debug) {
                     console.log('[aiadvisor] ИИ: ответ', ({ new: 'новый', cache: 'из кэша сервера', interval: 'прежний (новый не чаще раза в 10 минут)' })[ai.src] || ai.src || '?', '; названий получено', ai.titles.length);
                     try {
-                        var sent = JSON.parse(lastAiBody || '{}');
-                        console.log('[aiadvisor] ИИ: образец запроса —', JSON.stringify((sent.history || []).slice(0, 2)), '| skip:', JSON.stringify((sent.skip || []).slice(0, 1)));
+                        var sent = JSON.parse(lastAiBody[cat] || '{}');
+                        console.log('[aiadvisor] ИИ: образец запроса (' + cat + ') —', JSON.stringify((sent.history || []).slice(0, 2)), '| skip:', JSON.stringify((sent.skip || []).slice(0, 1)));
                     } catch (e) { /* без образца */ }
+                    console.log('[aiadvisor] ИИ: принято по смягчённому правилу (' + (looseUsed || []).length + '):\n' + ((looseUsed || []).join('\n') || '—'));
                     console.log('[aiadvisor] ИИ: не найдено в TMDB (' + (misses || []).length + '):\n' + ((misses || []).join('\n') || '—'));
                     console.log('[aiadvisor] ИИ: отсеяно (' + rejected.length + '):\n' + (rejected.join('\n') || '—'));
                     console.log('[aiadvisor] ИИ: вкус —', ai.taste);
