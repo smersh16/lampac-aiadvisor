@@ -311,7 +311,8 @@
                 k: names(kw, 6).join(', '),
                 o: String(details.overview || '').replace(/\s+/g, ' ').trim().slice(0, 180),
                 c: countries.slice(0, 3).join(', '),
-                s: studio || ''
+                s: studio || '',
+                an: (kw || []).some(function (x) { return x && String(x.name).toLowerCase() === 'anime'; }) ? 1 : 0
             };
         }
 
@@ -464,12 +465,12 @@
     // ряды и настройки регистрируются по два раза
     if (window.aiadvisor_loaded) return;
     window.aiadvisor_loaded = true;
-    window.aiadvisor_version = '0.20';
+    window.aiadvisor_version = '0.21';
 
     // =====================================================================
     //  Часть Lampa
     // =====================================================================
-    var VERSION = '0.20';
+    var VERSION = '0.21';
     var HOST = '{localhost}';
     var TOKEN = '{token}';
     var CACHE_HOURS = 6;
@@ -836,7 +837,7 @@
     // refs: [{ key: 'tv:123', media, id }]; недостающие подгружаются пачкой (в фоне, ответ ИИ ждёт их)
     function ensureMeta(refs, cb) {
         var store = metaStore();
-        var todo = refs.filter(function (r) { return !store[r.key]; }).slice(0, META_BATCH);
+        var todo = refs.filter(function (r) { return !store[r.key] || store[r.key].an === undefined; }).slice(0, META_BATCH);
         if (!todo.length) return cb(store);
 
         var left = todo.length;
@@ -928,6 +929,29 @@
         });
     }
 
+    // Последний результат обращения к ИИ: пустой код — всё хорошо
+    function setAiStatus(cat, code) {
+        try { Lampa.Storage.set('aiadvisor_ai_status_' + cat, { code: code, ts: Date.now() }); } catch (e) { /* без статуса */ }
+    }
+
+    var AI_ERRORS = {
+        not_configured: 'на сервере нет настроек ИИ (database/aiadvisor/ai.json)',
+        disabled: 'ИИ выключен на сервере (enabled=false)',
+        no_certificates: 'на сервере нет сертификатов (database/aiadvisor/ca.pem)',
+        network: 'сервер или GigaChat недоступен',
+        empty: 'ИИ вернул пустой ответ',
+        auth: 'ключ GigaChat не принят',
+        no_answer: 'ИИ не дал рекомендаций'
+    };
+
+    function aiStatusText(cat) {
+        var st = Lampa.Storage.get('aiadvisor_ai_status_' + cat, '');
+        if (!st || typeof st !== 'object' || !st.code) return '';
+        var code = String(st.code);
+        var text = AI_ERRORS[code] || (/^http_|^oauth_/.test(code) ? 'GigaChat ответил ошибкой ' + code : code);
+        return ' · Последняя попытка не удалась: ' + text;
+    }
+
     function postAi(cat, sig, cached, body, cb) {
         var net = new Lampa.Reguest();
         net.timeout(100000);
@@ -935,12 +959,15 @@
             if (json && json.success && json.titles && json.titles.length) {
                 var entry = { sig: sig, ts: Date.now(), taste: json.taste || '', titles: json.titles };
                 Lampa.Storage.set(aiKey(cat), entry);
+                setAiStatus(cat, '');
                 cb(entry);
             } else {
+                setAiStatus(cat, json && json.error || 'no_answer');
                 // старые рекомендации лучше, чем никаких
                 cb(cached && cached.titles ? cached : { error: json && json.error || 'no_answer' });
             }
         }, function () {
+            setAiStatus(cat, 'network');
             cb(cached && cached.titles ? cached : { error: 'network' });
         }, body, { headers: { 'Content-Type': 'application/json' } });
     }
@@ -948,7 +975,7 @@
     // Названия от модели -> карточки TMDB (поиск по названию и году, совпадение названия обязательно)
     function resolveAi(cat, titles, cb) {
         var medias = cat === 'tv' ? ['tv'] : cat === 'movie' ? ['movie'] : ['tv', 'movie'];
-        var parsed = titles.map(Core.parseAiTitle).filter(Boolean).slice(0, 25);
+        var parsed = titles.map(Core.parseAiTitle).filter(Boolean).slice(0, 40);
         var found = new Array(parsed.length);
         var left = parsed.length * medias.length;
         if (!left) return cb([]);
@@ -956,14 +983,15 @@
         function finish() {
             var seen = {};
             var out = [];
-            found.forEach(function (c) {
-                if (!c) return;
+            var misses = [];
+            found.forEach(function (c, idx) {
+                if (!c) { misses.push(parsed[idx].title); return; }
                 var k = Core.seenKey(Core.mediaOf(c), c.id);
                 if (seen[k]) return;
                 seen[k] = true;
                 out.push(c);
             });
-            cb(out);
+            cb(out, misses);
         }
 
         parsed.forEach(function (p, idx) {
@@ -1026,12 +1054,19 @@
                 if (debug) console.log('[aiadvisor] ИИ недоступен:', ai && ai.error);
                 return done(results);
             }
-            resolveAi(cat, ai.titles, function (cards) {
+            resolveAi(cat, ai.titles, function (cards, misses) {
+                var rejected = [];
                 var valid = cards.filter(function (c) {
-                    return Core.categoryOf(c) === cat && Core.score(c, rankCtx) !== null && !timelineWatched(c);
+                    var name = c.title || c.name;
+                    if (Core.categoryOf(c) !== cat) { rejected.push(name + ' — другая категория (' + Core.categoryOf(c) + ')'); return false; }
+                    if (Core.score(c, rankCtx) === null) { rejected.push(name + ' — отсеяно (уже смотрели, жанр/стоп-слово/язык/год/рейтинг)'); return false; }
+                    if (timelineWatched(c)) { rejected.push(name + ' — просмотрено по таймлайну'); return false; }
+                    return true;
                 });
                 valid.forEach(function (c) { c.overview = 'Рекомендует ИИ. ' + (c.overview || ''); });
                 if (debug) {
+                    console.log('[aiadvisor] ИИ: не найдено в TMDB (' + (misses || []).length + '):', (misses || []).join(' | ') || '—');
+                    console.log('[aiadvisor] ИИ: отсеяно (' + rejected.length + '):\n' + (rejected.join('\n') || '—'));
                     console.log('[aiadvisor] ИИ: вкус —', ai.taste);
                     console.log('[aiadvisor] ИИ: предложено', ai.titles.length, ', найдено в TMDB и прошло фильтры', valid.length, ':',
                         valid.map(function (c) { return c.title || c.name; }).join(' | '));
@@ -1168,6 +1203,76 @@
         } catch (e) { /* меню карточки недоступно в этой версии Lampa */ }
     }
 
+    // ---- ряд «Новое у ваших сериалов»: недавно вышла серия или сезон, а вы эту серию ещё не смотрели ----
+    var NEW_KEY = 'aiadvisor_new_cache';
+    var NEW_DAYS = 45;
+    var NEW_CHECK = 40;
+    var NEW_TTL = 6 * 3600 * 1000;
+
+    function episodeSeen(card, s, e) {
+        try {
+            if (Lampa.Timeline && typeof Lampa.Timeline.watchedEpisode === 'function') return Lampa.Timeline.watchedEpisode(card, s, e) >= 80;
+        } catch (err) { /* в этой версии Lampa проверки серии нет */ }
+        return false;
+    }
+
+    function loadNew(cb) {
+        prepare(function (data) {
+            var shows = [];
+            ['tv', 'anime', 'cartoon'].forEach(function (c) {
+                (data.merged.byCat[c] || []).forEach(function (i) {
+                    // начатое всерьёз: пробные 1–14% не считаем
+                    if (i.media === 'tv' && !(i.p >= 0 && i.p < 15)) shows.push(i);
+                });
+            });
+            shows.sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); });
+            shows = shows.slice(0, NEW_CHECK);
+            if (!shows.length) return cb([]);
+
+            var sig = shows.map(function (i) { return i.id; }).join(',');
+            var cached = Lampa.Storage.get(NEW_KEY, '');
+            if (cached && typeof cached === 'object' && cached.sig === sig && Date.now() - cached.ts < NEW_TTL) return cb(cached.results);
+
+            var left = shows.length;
+            var found = [];
+            var limit = Date.now() - NEW_DAYS * 86400000;
+
+            function finish() {
+                found.sort(function (a, b) { return b._new.ts - a._new.ts; });
+                var results = found.slice(0, 20);
+                Lampa.Storage.set(NEW_KEY, { ts: Date.now(), sig: sig, results: results });
+                cb(results);
+            }
+
+            shows.forEach(function (it) {
+                enqueue(function (release) {
+                    tmdbGet('tv/' + it.id, {}, function (d) {
+                        var last = d && d.last_episode_to_air;
+                        var ts = last && last.air_date ? Date.parse(last.air_date) : 0;
+                        if (ts && ts >= limit && ts <= Date.now() && !episodeSeen(d, last.season_number, last.episode_number)) {
+                            var firstOfSeason = last.episode_number === 1 && last.season_number > 1;
+                            found.push({
+                                id: d.id, name: d.name, original_name: d.original_name, media_type: 'tv',
+                                poster_path: d.poster_path, backdrop_path: d.backdrop_path,
+                                first_air_date: d.first_air_date, vote_average: d.vote_average,
+                                original_language: d.original_language,
+                                genre_ids: (d.genres || []).map(function (g) { return g.id; }),
+                                overview: (firstOfSeason ? 'Новый сезон ' + last.season_number + ' (с ' + last.air_date + '). '
+                                    : 'Новая серия: сезон ' + last.season_number + ', серия ' + last.episode_number + ' (' + last.air_date + '). ') + (d.overview || ''),
+                                _new: { ts: ts }
+                            });
+                        }
+                        release();
+                        if (--left === 0) finish();
+                    }, function () {
+                        release();
+                        if (--left === 0) finish();
+                    });
+                });
+            });
+        });
+    }
+
     // ---- ряды на главной ----
     function registerRows() {
         if (!Lampa.ContentRows || typeof Lampa.ContentRows.add !== 'function') return;
@@ -1188,6 +1293,22 @@
                     };
                 }
             });
+        });
+
+        Lampa.ContentRows.add({
+            name: 'aiadvisor_new',
+            title: 'Новое у ваших сериалов',
+            index: 1 + Core.CATS.length,
+            screen: ['main'],
+            call: function () {
+                if (Lampa.Storage.get('aiadvisor_new_enabled', true) === false) return;
+
+                return function (callback) {
+                    loadNew(function (results) {
+                        callback({ title: 'Новое у ваших сериалов', results: results });
+                    });
+                };
+            }
         });
     }
 
@@ -1384,7 +1505,7 @@
                 setDescr(Core.CAT_TITLES[cat] + ': ' + NOW_NAME, effectiveText(cat, items));
                 var ai = aiCached(cat);
                 var aiOn = Lampa.Storage.get(storageKey(cat, 'ai'), false) === true;
-                setDescr(Core.CAT_TITLES[cat] + ': ' + AI_NAME, !aiOn ? 'ИИ выключен' : (ai && ai.taste ? ai.taste : 'ещё не рассчитан: откройте главную'));
+                setDescr(Core.CAT_TITLES[cat] + ': ' + AI_NAME, !aiOn ? 'ИИ выключен' : ((ai && ai.taste ? ai.taste : 'ещё не рассчитан: откройте главную') + aiStatusText(cat)));
             });
         });
     }
@@ -1412,6 +1533,12 @@
             component: 'aiadvisor',
             param: { name: 'aiadvisor_version', type: 'static' },
             field: { name: 'Версия плагина', description: VERSION }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: 'aiadvisor',
+            param: { name: 'aiadvisor_new_enabled', type: 'trigger', default: true },
+            field: { name: 'Ряд «Новое у ваших сериалов»', description: 'Сериалы из вашей истории, у которых за последние ' + NEW_DAYS + ' дней вышла серия, которую вы ещё не смотрели' }
         });
 
         Core.CATS.forEach(function (cat) {
@@ -1518,6 +1645,34 @@
                 console.log('[aiadvisor] готово: выполните copy(__aiadvisor_export)');
             });
         }, false, 40);
+    };
+
+    // Сравнение нашей классификации «аниме/мультфильм» с ключевым словом TMDB «anime» по вашей истории
+    window.aiadvisorAnimeCheck = function () {
+        prepare(function (data) {
+            var refs = [];
+            var cats = {};
+            Core.CATS.forEach(function (c) {
+                (data.merged.byCat[c] || []).forEach(function (i) {
+                    if ((i.g || []).indexOf(16) < 0) return;
+                    refs.push({ key: i.media + ':' + i.id, media: i.media, id: i.id });
+                    cats[i.media + ':' + i.id] = { cat: c, t: i.t, y: i.y };
+                });
+            });
+            console.log('[aiadvisor] анимация в истории:', refs.length, '; запрашиваю ключевые слова (до ' + META_BATCH + ')…');
+            ensureMeta(refs, function (meta) {
+                var agree = [], conflict = [], unknown = 0;
+                refs.forEach(function (r) {
+                    var m = meta[r.key];
+                    if (!m || m.an === undefined) { unknown++; return; }
+                    var info = cats[r.key];
+                    var line = info.t + ' (' + info.y + ') — у нас: ' + info.cat + ', в TMDB слово anime: ' + (m.an ? 'да' : 'нет');
+                    ((info.cat === 'anime') === !!m.an ? agree : conflict).push(line);
+                });
+                console.log('[aiadvisor] совпадает с TMDB:', agree.length, '; расходится:', conflict.length, '; нет данных:', unknown);
+                console.log('[aiadvisor] расхождения:\n' + (conflict.join('\n') || '—'));
+            });
+        });
     };
 
     window.aiadvisorDebug = function (cat) {

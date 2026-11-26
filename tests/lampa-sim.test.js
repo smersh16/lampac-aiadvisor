@@ -24,7 +24,7 @@ function makeBody() {
 }
 const tmdbDetails = {
     'tv/92?append_to_response=credits,keywords': { vote_average: 5.46, created_by: [{ name: 'Автор Скучный' }], networks: [{ name: 'Сеть Х' }], origin_country: ['JP'], overview: 'Скучный   сюжет\nпро ничего', keywords: { results: [{ name: 'школа' }] }, credits: { cast: [{ name: 'Актёр А' }, { name: 'Актёр Б' }] } },
-    'tv/1': { id: 1, genres: [{ id: 16 }, { id: 10759 }], original_language: 'ja', origin_country: ['JP'], first_air_date: '2002-10-03' },
+    'tv/1': { id: 1, name: 'Наруто', original_name: 'Naruto', genres: [{ id: 16 }, { id: 10759 }], original_language: 'ja', origin_country: ['JP'], first_air_date: '2002-10-03', last_episode_to_air: { season_number: 3, episode_number: 1, air_date: new Date(Date.now() - 5 * 86400000).toISOString().slice(0, 10) } },
     'movie/2': { id: 2, genres: [{ id: 28 }, { id: 878 }], original_language: 'en', release_date: '2010-07-15' }
 };
 
@@ -111,18 +111,18 @@ function run(name) {
 }
 
 (async () => {
-    assert.strictEqual(rows.length, 4, 'четыре ряда');
-    assert.deepStrictEqual(rows.map(r => r.name), ['aiadvisor_anime', 'aiadvisor_cartoon', 'aiadvisor_tv', 'aiadvisor_movie']);
+    assert.strictEqual(rows.length, 5, 'четыре ряда + «Новое у ваших сериалов»');
+    assert.deepStrictEqual(rows.map(r => r.name), ['aiadvisor_anime', 'aiadvisor_cartoon', 'aiadvisor_tv', 'aiadvisor_movie', 'aiadvisor_new']);
     assert.ok(rows.every(r => r.screen.includes('main')));
     assert.ok(settings.length > 20, 'настройки зарегистрированы');
     const ver = settings.find(p => p.param.name === 'aiadvisor_version');
-    assert.ok(ver && ver.field.description === '0.20', 'версия показана в настройках');
+    assert.ok(ver && ver.field.description === '0.21', 'версия показана в настройках');
 
     // повторная загрузка плагина не дублирует ряды и настройки
     const settingsBefore = settings.length;
     delete require.cache[require.resolve(path.join(__dirname, '..', 'AiAdvisor', 'plugin.js'))];
     require(path.join(__dirname, '..', 'AiAdvisor', 'plugin.js'));
-    assert.strictEqual(rows.length, 4, 'после второй загрузки рядов по-прежнему четыре');
+    assert.strictEqual(rows.length, 5, 'после второй загрузки рядов по-прежнему пять');
     assert.strictEqual(settings.length, settingsBefore, 'настройки не продублированы');
 
     // аниме: из кандидатов остаются только аниме, просмотренное (id 1) и стоп-слова исключены
@@ -304,6 +304,19 @@ function run(name) {
     const before = tmdbCalls.length;
     await run('aiadvisor_anime');
     assert.strictEqual(tmdbCalls.length, before, 'повторный вызов берётся из кэша');
+
+    // ряд «Новое у ваших сериалов»: у Наруто (id 1) пять дней назад вышла 1 серия 3 сезона
+    const fresh = await run('aiadvisor_new');
+    assert.ok(fresh.results.some(r => r.id === 1), 'сериал из истории с новой серией попал в ряд');
+    assert.ok(/Новый сезон 3/.test(fresh.results.find(r => r.id === 1).overview), 'подпись про новый сезон');
+    // серия уже просмотрена: в ряд не попадает
+    store['aiadvisor_new_cache'] = '';
+    global.Lampa.Timeline.watchedEpisode = () => 100;
+    assert.strictEqual((await run('aiadvisor_new')).results.length, 0, 'просмотренная новая серия не показывается');
+    delete global.Lampa.Timeline.watchedEpisode;
+    store['aiadvisor_new_enabled'] = false;
+    assert.strictEqual(rows.find(r => r.name === 'aiadvisor_new').call({}, 'main'), undefined, 'ряд выключается настройкой');
+    store['aiadvisor_new_enabled'] = true;
 
     console.log('lampa-sim: все проверки прошли');
 })().catch(e => { console.error('FAIL', e.message); process.exit(1); });

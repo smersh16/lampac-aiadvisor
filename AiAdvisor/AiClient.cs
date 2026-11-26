@@ -47,7 +47,11 @@ public static class AiClient
     static readonly SemaphoreSlim gate = new(1, 1);
 
     static readonly ConcurrentDictionary<string, (string hash, DateTime at, AiOutcome result)> cache = new();
-    static readonly ConcurrentDictionary<string, DateTime> failures = new();
+    static readonly ConcurrentDictionary<string, (DateTime at, string code)> failures = new();
+
+    // не чаще одного реального обращения к ИИ на пользователя и категорию (защита лимита токенов)
+    static readonly TimeSpan MinInterval = TimeSpan.FromMinutes(10);
+    static readonly ConcurrentDictionary<string, DateTime> lastCall = new();
 
     static HttpClient http;
     static DateTime httpStamp;
@@ -61,8 +65,12 @@ public static class AiClient
         if (cache.TryGetValue(key, out var hit) && hit.hash == hash && DateTime.UtcNow - hit.at < CacheTtl)
             return hit.result;
 
-        if (failures.TryGetValue(key, out var failedAt) && DateTime.UtcNow - failedAt < ErrorBackoff)
-            return Fail("backoff");
+        if (failures.TryGetValue(key, out var failed) && DateTime.UtcNow - failed.at < ErrorBackoff)
+            return Fail(failed.code);
+
+        // история изменилась, но недавно уже считали: отдаём прежний ответ, новый посчитается позже
+        if (cache.TryGetValue(key, out var previous) && lastCall.TryGetValue(key, out var called) && DateTime.UtcNow - called < MinInterval)
+            return previous.result;
 
         var conf = LoadConf();
         if (conf == null)
@@ -82,6 +90,7 @@ public static class AiClient
             if (client == null)
                 return Remember(key, Fail("no_certificates"));
 
+            lastCall[key] = DateTime.UtcNow;
             string answer = await Ask(client, conf, Prompt(cat, historyLines, skipLines));
             var result = Parse(answer);
 
@@ -90,6 +99,7 @@ public static class AiClient
 
             cache[key] = (hash, DateTime.UtcNow, result);
             failures.TryRemove(key, out _);
+            Prune();
             return result;
         }
         catch (AiException e)
@@ -108,8 +118,24 @@ public static class AiClient
 
     static AiOutcome Remember(string key, AiOutcome result)
     {
-        failures[key] = DateTime.UtcNow;
+        failures[key] = (DateTime.UtcNow, result.Error ?? "error");
         return result;
+    }
+
+    // словари не растут бесконечно: устаревшие записи удаляются
+    static void Prune()
+    {
+        if (cache.Count < 200)
+            return;
+
+        foreach (var pair in cache)
+        {
+            if (DateTime.UtcNow - pair.Value.at > CacheTtl)
+            {
+                cache.TryRemove(pair.Key, out _);
+                lastCall.TryRemove(pair.Key, out _);
+            }
+        }
     }
 
     static AiOutcome Fail(string code) => new AiOutcome { Ok = false, Error = code };
@@ -147,7 +173,7 @@ public static class AiClient
             + "Учитывай жанры, режиссёров, актёров, страну и студию, рейтинг, ключевые слова и сюжет: "
             + "найди общее среди понравившегося и среди того, что не зашло. "
             + "Сначала в 2-3 предложениях, начиная со слова ВКУС:, опиши вкус пользователя (одной строкой). "
-            + "Затем предложи 20 названий, которые могут понравиться, включая малоизвестные, "
+            + "Затем предложи 30 названий, которые могут понравиться, включая малоизвестные, "
             + "но не из истории выше. Каждое название с новой строки в формате: Название (год). "
             + "Названия на русском, если есть общеизвестный перевод.";
     }
@@ -162,7 +188,7 @@ public static class AiClient
             {
                 ["model"] = conf.Value<string>("model") ?? "GigaChat-3-Ultra",
                 ["temperature"] = 0.3,
-                ["max_tokens"] = 1500,
+                ["max_tokens"] = 2200,
                 ["messages"] = new JArray
                 {
                     new JObject { ["role"] = "system", ["content"] = "Ты эксперт по кино и сериалам. Отвечай обычным текстом по строкам, без JSON и без вступлений." },
@@ -315,6 +341,6 @@ public static class AiClient
         if (taste.Length > 600)
             taste = taste.Substring(0, 600);
 
-        return new AiOutcome { Ok = true, Taste = taste, Titles = titles.Take(25).ToArray() };
+        return new AiOutcome { Ok = true, Taste = taste, Titles = titles.Take(40).ToArray() };
     }
 }
