@@ -2,6 +2,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Concurrent;
+using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Text;
@@ -34,6 +35,68 @@ public static class ShikiClient
     static readonly ConcurrentDictionary<string, (DateTime at, ShikiResult result)> cache = new();
     static DateTime lastRequest = DateTime.MinValue;
 
+    // кэш переживает перезапуск контейнера: database/aiadvisor/shiki.json
+    static readonly string cachePath = Path.Combine("database", "aiadvisor", "shiki.json");
+    static bool loaded;
+
+    static void LoadCache()
+    {
+        if (loaded)
+            return;
+
+        loaded = true;
+        try
+        {
+            if (!File.Exists(cachePath))
+                return;
+
+            var data = JObject.Parse(File.ReadAllText(cachePath, Encoding.UTF8));
+            foreach (var p in data.Properties())
+            {
+                var v = p.Value as JObject;
+                if (v == null)
+                    continue;
+
+                cache[p.Name] = (DateTimeOffset.FromUnixTimeSeconds(v.Value<long?>("t") ?? 0).UtcDateTime,
+                    new ShikiResult { Found = v.Value<bool?>("f") ?? false, Kind = v.Value<string>("k") ?? string.Empty, Score = v.Value<double?>("s") ?? 0 });
+            }
+        }
+        catch
+        {
+            // повреждённый кэш не страшен: заполнится заново
+        }
+    }
+
+    static void SaveCache()
+    {
+        try
+        {
+            var data = new JObject();
+            foreach (var pair in cache)
+            {
+                if (DateTime.UtcNow - pair.Value.at >= Ttl)
+                    continue;
+
+                data[pair.Key] = new JObject
+                {
+                    ["t"] = new DateTimeOffset(pair.Value.at, TimeSpan.Zero).ToUnixTimeSeconds(),
+                    ["f"] = pair.Value.result.Found,
+                    ["k"] = pair.Value.result.Kind,
+                    ["s"] = pair.Value.result.Score
+                };
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(cachePath));
+            string tmp = cachePath + ".tmp";
+            File.WriteAllText(tmp, data.ToString(Formatting.None), new UTF8Encoding(false));
+            File.Move(tmp, cachePath, true);
+        }
+        catch
+        {
+            // без файла кэш остаётся в памяти
+        }
+    }
+
     // null — запрос не состоялся (ошибка сети, 429): в кэш не кладём
     public static async Task<ShikiResult> Lookup(string title, string original, int year)
     {
@@ -43,6 +106,7 @@ public static class ShikiClient
 
         string normOriginal = Norm(original);
         string key = norm + "|" + normOriginal + "|" + year;
+        lock (cache) LoadCache();
         if (cache.TryGetValue(key, out var hit) && DateTime.UtcNow - hit.at < Ttl)
             return hit.result;
 
@@ -80,6 +144,7 @@ public static class ShikiClient
             }
 
             cache[key] = (DateTime.UtcNow, result);
+            SaveCache();
             return result;
         }
         catch

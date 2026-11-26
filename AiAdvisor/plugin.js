@@ -466,12 +466,12 @@
     // ряды и настройки регистрируются по два раза
     if (window.aiadvisor_loaded) return;
     window.aiadvisor_loaded = true;
-    window.aiadvisor_version = '0.24';
+    window.aiadvisor_version = '0.25';
 
     // =====================================================================
     //  Часть Lampa
     // =====================================================================
-    var VERSION = '0.24';
+    var VERSION = '0.25';
     var HOST = '{localhost}';
     var TOKEN = '{token}';
     var CACHE_HOURS = 6;
@@ -1682,9 +1682,9 @@
                         var tm = m.an === undefined ? '?' : (m.an ? 'да' : 'нет');
                         var sh = s.pending ? '?' : (s.found ? 'да' : 'нет');
                         var ours = info[a.k].cat === 'anime' ? 'да' : 'нет';
-                        rows.push((ours === sh && (tm === '?' || tm === ours) ? '  ' : '! ') + a.t + ' (' + a.y + ') — у нас аниме: ' + ours + ', TMDB-слово: ' + tm + ', Shikimori: ' + sh);
+                        rows.push((sh === '?' ? '… ' : (ours === sh && (tm === '?' || tm === ours) ? '  ' : '! ')) + a.t + ' (' + a.y + ') — у нас аниме: ' + ours + ', TMDB-слово: ' + tm + ', Shikimori: ' + sh);
                     });
-                    console.log('[aiadvisor] ожидают ответа Shikimori:', pending, '; показано', ask.length, 'из', refs.length, '(с ' + offset + '; следующие: aiadvisorAnimeCheck(' + (offset + 40) + '))', '(строки с «!» — расхождения):\n' + rows.join('\n'));
+                    console.log('[aiadvisor] ожидают ответа Shikimori:', pending, '; показано', ask.length, 'из', refs.length, '(с ' + offset + '; следующие: aiadvisorAnimeCheck(' + (offset + 40) + '))', '(строки с «!» — расхождения, с «…» — ещё нет ответа; не запускайте несколько вызовов одновременно):\n' + rows.join('\n'));
                 }, function () {
                     console.log('[aiadvisor] сервер не ответил на /aiadvisor/shiki (нет обновления сервера или Shikimori недоступен)');
                 }, JSON.stringify(ask), { headers: { 'Content-Type': 'application/json' } });
