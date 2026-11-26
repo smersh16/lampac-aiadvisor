@@ -56,7 +56,7 @@ public static class AiClient
 
     public static async Task<AiOutcome> Recommend(string key, string cat, List<string> historyLines, List<string> skipLines)
     {
-        string hash = Convert.ToHexString(SHA1.HashData(Encoding.UTF8.GetBytes(cat + "\n" + string.Join("\n", historyLines) + "\n--\n" + string.Join("\n", skipLines))));
+        string hash = Convert.ToHexString(SHA1.HashData(Encoding.UTF8.GetBytes(cat + "\n" + string.Join("\n", historyLines))));
 
         if (cache.TryGetValue(key, out var hit) && hit.hash == hash && DateTime.UtcNow - hit.at < CacheTtl)
             return hit.result;

@@ -455,12 +455,12 @@
     // ряды и настройки регистрируются по два раза
     if (window.aiadvisor_loaded) return;
     window.aiadvisor_loaded = true;
-    window.aiadvisor_version = '0.18';
+    window.aiadvisor_version = '0.19';
 
     // =====================================================================
     //  Часть Lampa
     // =====================================================================
-    var VERSION = '0.18';
+    var VERSION = '0.19';
     var HOST = '{localhost}';
     var TOKEN = '{token}';
     var CACHE_HOURS = 6;
@@ -880,8 +880,7 @@
     }
 
     function aiSig(recent, skips) {
-        return recent.map(function (i) { return i.media + i.id + ':' + (i.p === undefined ? -1 : i.p); }).join(',')
-            + '|' + (skips || []).map(function (e) { return e.k; }).join(',');
+        return recent.map(function (i) { return i.media + i.id + ':' + (i.p === undefined ? -1 : i.p); }).join(',');  // список «не интересно» в ключ не входит: новая отметка не вызывает запрос к ИИ
     }
 
     function fetchAi(cat, items, skips, cb) {
