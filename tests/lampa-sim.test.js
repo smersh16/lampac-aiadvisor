@@ -23,6 +23,7 @@ function makeBody() {
     return [{ querySelectorAll: () => names.map(mk) }];
 }
 const tmdbDetails = {
+    'tv/92?append_to_response=credits,keywords': { vote_average: 5.46, created_by: [{ name: 'Автор Скучный' }], networks: [{ name: 'Сеть Х' }], origin_country: ['JP'], overview: 'Скучный   сюжет\nпро ничего', keywords: { results: [{ name: 'школа' }] }, credits: { cast: [{ name: 'Актёр А' }, { name: 'Актёр Б' }] } },
     'tv/1': { id: 1, genres: [{ id: 16 }, { id: 10759 }], original_language: 'ja', origin_country: ['JP'], first_air_date: '2002-10-03' },
     'movie/2': { id: 2, genres: [{ id: 28 }, { id: 878 }], original_language: 'en', release_date: '2010-07-15' }
 };
@@ -115,7 +116,7 @@ function run(name) {
     assert.ok(rows.every(r => r.screen.includes('main')));
     assert.ok(settings.length > 20, 'настройки зарегистрированы');
     const ver = settings.find(p => p.param.name === 'aiadvisor_version');
-    assert.ok(ver && ver.field.description === '0.17', 'версия показана в настройках');
+    assert.ok(ver && ver.field.description === '0.18', 'версия показана в настройках');
 
     // повторная загрузка плагина не дублирует ряды и настройки
     const settingsBefore = settings.length;
@@ -211,6 +212,9 @@ function run(name) {
     const skipPost = posts.filter(p => p.url.includes('/aiadvisor/ai')).pop();
     const skipTitles = (skipPost.body.skip || []).map(e => e.t).sort();
     assert.deepStrictEqual(skipTitles, ['Брошенное аниме', 'Скучное аниме'], 'ИИ получил «брошено» и «не интересно» своей группы');
+    const rich = skipPost.body.skip.find(e => e.t === 'Скучное аниме');
+    assert.deepStrictEqual([rich.r, rich.d, rich.a, rich.k, rich.c, rich.s, rich.o], [5.5, 'Автор Скучный', 'Актёр А, Актёр Б', 'школа', 'JP', 'Сеть Х', 'Скучный сюжет про ничего'], 'ИИ получил рейтинг, автора, актёров, сюжет и т.д.');
+    assert.ok(Object.keys(store['aiadvisor_meta'] || {}).length >= 1, 'метаданные закэшированы на устройстве');
     global.__fav = {};
     global.__seen = null;
     store['aiadvisor_ai_anime'] = '';

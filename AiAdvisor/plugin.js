@@ -277,6 +277,35 @@
             return picked;
         }
 
+        // Подробности о фильме/сериале для ИИ: рейтинг, режиссёр, актёры, ключевые слова, сюжет, страна, студия/сеть.
+        // details: ответ TMDB tv/{id} или movie/{id} с append_to_response=credits,keywords
+        function names(list, n) {
+            return (list || []).slice(0, n).map(function (x) { return x && x.name; }).filter(Boolean);
+        }
+
+        function metaFrom(details, media) {
+            if (!details) return null;
+            var credits = details.credits || {};
+            var directors = media === 'tv' && (details.created_by || []).length
+                ? names(details.created_by, 2)
+                : names((credits.crew || []).filter(function (c) { return c.job === 'Director'; }), 2);
+            var kw = media === 'tv' ? (details.keywords && details.keywords.results) : (details.keywords && details.keywords.keywords);
+            var countries = (details.origin_country && details.origin_country.length)
+                ? details.origin_country
+                : (details.production_countries || []).map(function (c) { return c.iso_3166_1; });
+            var studio = media === 'tv' ? names(details.networks, 1)[0] : names(details.production_companies, 1)[0];
+
+            return {
+                r: Math.round((details.vote_average || 0) * 10) / 10,
+                d: directors.join(', '),
+                a: names(credits.cast, 4).join(', '),
+                k: names(kw, 6).join(', '),
+                o: String(details.overview || '').replace(/\s+/g, ' ').trim().slice(0, 180),
+                c: countries.slice(0, 3).join(', '),
+                s: studio || ''
+            };
+        }
+
         // ---- ИИ-подбор: названия от модели сопоставляются с TMDB ----
         function normTitle(text) {
             return String(text || '').toLowerCase().replace(/ё/g, 'е').replace(/[^a-zа-я0-9]+/g, ' ').trim();
@@ -410,6 +439,7 @@
             score: score,
             untranslated: untranslated,
             completionWeight: completionWeight,
+            metaFrom: metaFrom,
             normTitle: normTitle,
             parseAiTitle: parseAiTitle,
             matchAi: matchAi,
@@ -425,12 +455,12 @@
     // ряды и настройки регистрируются по два раза
     if (window.aiadvisor_loaded) return;
     window.aiadvisor_loaded = true;
-    window.aiadvisor_version = '0.17';
+    window.aiadvisor_version = '0.18';
 
     // =====================================================================
     //  Часть Lampa
     // =====================================================================
-    var VERSION = '0.17';
+    var VERSION = '0.18';
     var HOST = '{localhost}';
     var TOKEN = '{token}';
     var CACHE_HOURS = 6;
@@ -784,6 +814,55 @@
         return c && typeof c === 'object' ? c : null;
     }
 
+    // Подробности (режиссёр, актёры, сюжет…) кэшируются на устройстве и запрашиваются у TMDB один раз
+    var META_KEY = 'aiadvisor_meta';
+    var META_MAX = 300;
+    var META_BATCH = 100;
+
+    function metaStore() {
+        var m = Lampa.Storage.get(META_KEY, '');
+        return m && typeof m === 'object' ? m : {};
+    }
+
+    // refs: [{ key: 'tv:123', media, id }]; недостающие подгружаются пачкой (в фоне, ответ ИИ ждёт их)
+    function ensureMeta(refs, cb) {
+        var store = metaStore();
+        var todo = refs.filter(function (r) { return !store[r.key]; }).slice(0, META_BATCH);
+        if (!todo.length) return cb(store);
+
+        var left = todo.length;
+        function finish() {
+            var keys = Object.keys(store);
+            if (keys.length > META_MAX) {
+                keys.sort(function (a, b) { return (store[a].ts || 0) - (store[b].ts || 0); });
+                keys.slice(0, keys.length - META_MAX).forEach(function (k) { delete store[k]; });
+            }
+            try { Lampa.Storage.set(META_KEY, store); } catch (e) { /* без кэша */ }
+            cb(store);
+        }
+
+        todo.forEach(function (r) {
+            enqueue(function (release) {
+                tmdbGet(r.media + '/' + r.id + '?append_to_response=credits,keywords', {}, function (d) {
+                    var m = Core.metaFrom(d, r.media);
+                    if (m) { m.ts = Date.now(); store[r.key] = m; }
+                    release();
+                    if (--left === 0) finish();
+                }, function () {
+                    release();
+                    if (--left === 0) finish();
+                });
+            });
+        });
+    }
+
+    function metaFields(m) {
+        if (!m) return {};
+        var out = {};
+        ['r', 'd', 'a', 'k', 'o', 'c', 's'].forEach(function (f) { if (m[f]) out[f] = m[f]; });
+        return out;
+    }
+
     function aiRecent(items) {
         return items.slice().sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); }).slice(0, 60);
     }
@@ -813,14 +892,31 @@
         var cached = aiCached(cat);
         if (cached && cached.sig === sig && Date.now() - cached.ts < AI_TTL && cached.titles) return cb(cached);
 
-        var body = JSON.stringify({
-            cat: cat,
-            history: recent.map(function (i) {
-                return { t: i.t, y: i.y, p: i.p === undefined ? -1 : i.p, g: genreNames((i.g || []).filter(function (g) { return g !== 16; })) };
-            }),
-            skip: skips.map(function (e) { return { t: e.t, y: e.y, g: e.g }; })
-        });
+        var refs = recent.map(function (i) { return { key: i.media + ':' + i.id, media: i.media, id: i.id }; })
+            .concat(skips.map(function (e) { var kv = e.k.split(':'); return { key: e.k, media: kv[0], id: kv[1] }; }));
 
+        ensureMeta(refs, function (meta) {
+            var body = JSON.stringify({
+                cat: cat,
+                history: recent.map(function (i) {
+                    var row = { t: i.t, y: i.y, p: i.p === undefined ? -1 : i.p, g: genreNames((i.g || []).filter(function (g) { return g !== 16; })) };
+                    var m = metaFields(meta[i.media + ':' + i.id]);
+                    for (var f in m) row[f] = m[f];
+                    return row;
+                }),
+                skip: skips.map(function (e) {
+                    var row = { t: e.t, y: e.y, g: e.g };
+                    var m = metaFields(meta[e.k]);
+                    for (var f in m) row[f] = m[f];
+                    return row;
+                })
+            });
+
+            postAi(cat, sig, cached, body, cb);
+        });
+    }
+
+    function postAi(cat, sig, cached, body, cb) {
         var net = new Lampa.Reguest();
         net.timeout(100000);
         net.silent(apiUrl('/aiadvisor/ai'), function (json) {

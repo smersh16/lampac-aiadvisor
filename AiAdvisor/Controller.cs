@@ -270,21 +270,9 @@ public class AiAdvisorController : BaseController
             if (token is not JObject h)
                 continue;
 
-            string title = Oneline(h.Value<string>("t"), 120);
-            if (title.Length == 0)
-                continue;
-
-            int year = h.Value<int?>("y") ?? 0;
-            int percent = h.Value<int?>("p") ?? -1;
-            string genres = Oneline(h.Value<string>("g"), 80);
-
-            var sb = new StringBuilder("- ").Append(title).Append(" (").Append(year > 0 ? year.ToString() : "?").Append(")");
-            if (percent >= 0)
-                sb.Append(", досмотрено ").Append(Math.Min(percent, 100)).Append('%');
-            if (genres.Length > 0)
-                sb.Append(" [").Append(genres).Append(']');
-
-            lines.Add(sb.ToString());
+            string line = Line(h, true);
+            if (line != null)
+                lines.Add(line);
         }
 
         if (lines.Count == 0)
@@ -299,18 +287,9 @@ public class AiAdvisorController : BaseController
                 if (token is not JObject h)
                     continue;
 
-                string title = Oneline(h.Value<string>("t"), 120);
-                if (title.Length == 0)
-                    continue;
-
-                int year = h.Value<int?>("y") ?? 0;
-                string genres = Oneline(h.Value<string>("g"), 80);
-
-                var sb = new StringBuilder("- ").Append(title).Append(" (").Append(year > 0 ? year.ToString() : "?").Append(")");
-                if (genres.Length > 0)
-                    sb.Append(" [").Append(genres).Append(']');
-
-                skipLines.Add(sb.ToString());
+                string line = Line(h, false);
+                if (line != null)
+                    skipLines.Add(line);
             }
         }
 
@@ -323,6 +302,51 @@ public class AiAdvisorController : BaseController
             taste = result.Taste,
             titles = result.Titles
         }), "application/json; charset=utf-8");
+    }
+
+    // Одна строка о фильме для ИИ: название, год, досмотр, рейтинг, страна, студия, режиссёр, актёры, жанры, ключевые слова, сюжет
+    static string Line(JObject h, bool withPercent)
+    {
+        string title = Oneline(h.Value<string>("t"), 120);
+        if (title.Length == 0)
+            return null;
+
+        int year = h.Value<int?>("y") ?? 0;
+        var sb = new StringBuilder("- ").Append(title).Append(" (").Append(year > 0 ? year.ToString() : "?").Append(")");
+
+        int percent = h.Value<int?>("p") ?? -1;
+        if (withPercent && percent >= 0)
+            sb.Append(", досмотрено ").Append(Math.Min(percent, 100)).Append('%');
+
+        double rating = h.Value<double?>("r") ?? 0;
+        if (rating > 0 && rating <= 10)
+            sb.Append(", рейтинг ").Append(rating.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture));
+
+        void Part(string label, string key, int max)
+        {
+            string v = Oneline(h.Value<string>(key), max);
+            if (v.Length > 0)
+                sb.Append(", ").Append(label).Append(' ').Append(v);
+        }
+
+        Part("страна", "c", 40);
+        Part("студия/сеть", "s", 40);
+        Part("реж.", "d", 80);
+        Part("в ролях", "a", 100);
+
+        string genres = Oneline(h.Value<string>("g"), 80);
+        if (genres.Length > 0)
+            sb.Append(" [").Append(genres).Append(']');
+
+        string kw = Oneline(h.Value<string>("k"), 100);
+        if (kw.Length > 0)
+            sb.Append("; ключевые слова: ").Append(kw);
+
+        string plot = Oneline(h.Value<string>("o"), 200);
+        if (plot.Length > 0)
+            sb.Append("; сюжет: ").Append(plot);
+
+        return sb.ToString();
     }
 
     static string Oneline(string value, int max)
